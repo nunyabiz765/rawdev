@@ -1,0 +1,23 @@
+pkgbase = rawdev-bin
+	pkgdesc = RAW photo develop engine for scripts and AI agents (prebuilt binary)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/nunyabiz765/rawdev
+	arch = x86_64
+	license = MIT OR Apache-2.0
+	depends = libraw
+	depends = perl-image-exiftool
+	depends = gcc-libs
+	depends = glibc
+	optdepends = vulkan-icd-loader: GPU noise reduction (--gpu)
+	optdepends = vulkan-radeon: AMD GPUs
+	optdepends = vulkan-intel: Intel GPUs
+	optdepends = nvidia-utils: NVIDIA GPUs
+	provides = rawdev
+	conflicts = rawdev
+	options = !debug
+	options = !strip
+	source = https://github.com/nunyabiz765/rawdev/releases/download/v0.1.0/rawdev-0.1.0-x86_64-linux.tar.gz
+	sha256sums = SKIP
+
+pkgname = rawdev-bin

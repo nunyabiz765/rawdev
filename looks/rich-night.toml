@@ -1,0 +1,60 @@
+# rich-night: a rich after-dark look, tuned on handheld high-ISO city and street-light frames.
+# Curve fitted to the camera's own JPEG and pulled 3% so night stays night; NLM noise reduction by ISO;
+# +30% chroma on muted colours; purple-ring cleanup around blown lights.
+# This file is the reference: the built-in copy produces byte-identical output release to release.
+# Copy it (`rawdev looks rich-night > my-night.toml`), change numbers, and pass `--look my-night.toml`.
+name = "rich-night"
+description = "Rich night: camera-matched curve pulled 3%, NLM by ISO, +30% muted chroma, ring defringe"
+recipe = "night"
+
+[tone]
+curve_scale = 0.97   # fitted curve x0.97 so night stays night
+vibrance = 0.06      # +6% saturation, tapering off for saturated colours
+
+[nr]
+chroma_median = 3    # Cr/Cb median after NLM
+luma_blend = 0.2     # 20% of the un-denoised luma back, for texture
+blend_from = "nlm-input"
+strength = [
+  { max_iso = 500,  luma = 3.0, color = 5.0 },
+  { max_iso = 1000, luma = 4.0, color = 6.0 },
+  { max_iso = 2000, luma = 6.0, color = 9.0 },
+  { max_iso = 3200, luma = 7.0, color = 11.0 },
+  {                 luma = 9.0, color = 14.0 },
+]
+
+[nr.strong]          # --strong frames: saturated coloured-LED light
+luma_add = 1.0
+color_add = 7.0
+pre_median = true    # 3x3 RGB median first: kills isolated specks NLM keeps
+chroma_median = 5
+luma_blend = 0.1
+
+[chroma]
+amount = 0.30        # +30% Lab chroma on muted colours
+fade_chroma = 90.0   # ... fading to nothing at C* 90 so lit signs don't go neon
+white_l = 97.0       # ... and sparing near-whites (L* 85 -> 97)
+white_width = 12.0
+
+[defringe]           # purple ring around blown lights; --nofringe frames skip it
+enabled = true
+core_luma = 235.0
+grow_px = 15
+a_start = 4.0
+a_width = 10.0
+b_end = 6.0
+b_width = 10.0
+blur_sigma = 1.5
+strength = 0.8
+
+[sharpen]            # Pillow UnsharpMask
+radius = 1.0
+percent = 45
+threshold = 4
+
+[export]
+full_quality = 92
+full_chroma = "4:4:4"
+share_long_edge = 2000
+share_quality = 90
+share_chroma = "4:2:0"

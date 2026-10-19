@@ -1,0 +1,23 @@
+cpu                                          gpu=None                                     frames=9/9 wall=51.0s NR total=35.8s mean=3.98s/frame
+NVIDIA_GeForce_RTX_2060                      gpu=NVIDIA GeForce RTX 2060 (Vulkan)         frames=9/9 wall=25.6s NR total=9.0s mean=1.00s/frame
+  NVIDIA_GeForce_RTX_2060 vs cpu: 18 identical, 0 different
+AMD_Radeon_760M_Graphics__RADV_PHOENIX_      gpu=AMD Radeon 760M Graphics (RADV PHOENIX) (Vulkan) frames=9/9 wall=28.3s NR total=12.0s mean=1.33s/frame
+  AMD_Radeon_760M_Graphics__RADV_PHOENIX_ vs cpu: 18 identical, 0 different
+llvmpipe__LLVM_23_1_1__256_bits_             gpu=llvmpipe (LLVM 23.1.1, 256 bits) (Vulkan) frames=9/9 wall=529.6s NR total=520.6s mean=57.84s/frame
+  llvmpipe__LLVM_23_1_1__256_bits_ vs cpu: 18 identical, 0 different
+
+cpu                                          gpu=None                                     frames=3/3 wall=23.7s NR total=19.7s mean=6.57s/frame
+NVIDIA_GeForce_RTX_2060                      gpu=NVIDIA GeForce RTX 2060 (Vulkan)         frames=3/3 wall=10.1s NR total=6.1s mean=2.04s/frame
+  NVIDIA_GeForce_RTX_2060 vs cpu: 6 identical, 0 different
+AMD_Radeon_760M_Graphics__RADV_PHOENIX_      gpu=AMD Radeon 760M Graphics (RADV PHOENIX) (Vulkan) frames=3/3 wall=11.4s NR total=7.4s mean=2.48s/frame
+  AMD_Radeon_760M_Graphics__RADV_PHOENIX_ vs cpu: 6 identical, 0 different
+llvmpipe__LLVM_23_1_1__256_bits_             gpu=llvmpipe (LLVM 23.1.1, 256 bits) (Vulkan) frames=3/3 wall=267.8s NR total=263.8s mean=87.94s/frame
+  llvmpipe__LLVM_23_1_1__256_bits_ vs cpu: 6 identical, 0 different
+
+cpu                                          gpu=None                                     frames=4/4 wall=27.6s NR total=20.2s mean=6.72s/frame
+NVIDIA_GeForce_RTX_2060                      gpu=NVIDIA GeForce RTX 2060 (Vulkan)         frames=4/4 wall=13.1s NR total=6.0s mean=2.00s/frame
+  NVIDIA_GeForce_RTX_2060 vs cpu: 8 identical, 0 different
+AMD_Radeon_760M_Graphics__RADV_PHOENIX_      gpu=AMD Radeon 760M Graphics (RADV PHOENIX) (Vulkan) frames=4/4 wall=14.2s NR total=7.1s mean=2.36s/frame
+  AMD_Radeon_760M_Graphics__RADV_PHOENIX_ vs cpu: 8 identical, 0 different
+llvmpipe__LLVM_23_1_1__256_bits_             gpu=llvmpipe (LLVM 23.1.1, 256 bits) (Vulkan) frames=4/4 wall=275.8s NR total=268.6s mean=89.55s/frame
+  llvmpipe__LLVM_23_1_1__256_bits_ vs cpu: 8 identical, 0 different

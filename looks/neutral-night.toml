@@ -1,0 +1,60 @@
+# neutral-night: a modest after-dark look. Curve fitted to the camera's own JPEG (sidecar or embedded
+# preview) and pulled 3% so night stays night, or a fixed neutral curve when there is neither; NLM noise
+# reduction by ISO; a small chroma lift; mild purple-ring cleanup around lights.
+# Licence: CC0 (copy and change it freely).
+name = "neutral-night"
+description = "Neutral night: camera-matched or neutral curve pulled 3%, NLM by ISO, small chroma lift, mild defringe"
+recipe = "night"
+
+[tone]
+curve_scale = 0.97
+vibrance = 0.02
+neutral = { gain = 2.0, knee = 0.6 }
+
+[nr]
+chroma_median = 3
+luma_blend = 0.25
+blend_from = "nlm-input"
+strength = [
+  { max_iso = 800,  luma = 3.0, color = 5.0 },
+  { max_iso = 1600, luma = 4.0, color = 7.0 },
+  { max_iso = 3200, luma = 6.0, color = 9.0 },
+  { max_iso = 6400, luma = 7.0, color = 11.0 },
+  {                 luma = 9.0, color = 14.0 },
+]
+
+[nr.strong]          # --strong frames: saturated coloured-LED light
+luma_add = 1.0
+color_add = 5.0
+pre_median = true
+chroma_median = 5
+luma_blend = 0.15
+
+[chroma]
+amount = 0.12
+fade_chroma = 70.0
+white_l = 97.0
+white_width = 12.0
+
+[defringe]           # purple ring around blown lights; --nofringe frames skip it
+enabled = true
+core_luma = 240.0
+grow_px = 11
+a_start = 6.0
+a_width = 10.0
+b_end = 4.0
+b_width = 10.0
+blur_sigma = 1.5
+strength = 0.6
+
+[sharpen]
+radius = 1.0
+percent = 30
+threshold = 4
+
+[export]
+full_quality = 92
+full_chroma = "4:4:4"
+share_long_edge = 2000
+share_quality = 90
+share_chroma = "4:2:0"

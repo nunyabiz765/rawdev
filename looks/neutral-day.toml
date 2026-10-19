@@ -1,0 +1,82 @@
+# neutral-day: the default look for `rawdev develop`. Modest settings meant to suit most cameras:
+# curve fitted to the camera's own JPEG (sidecar or embedded preview) or, with neither, a fixed neutral
+# curve; light NR above ISO 400; a small chroma lift; gentle sharpening; purple cleanup kept mild.
+# Licence: CC0 (copy and change it freely).
+name = "neutral-day"
+description = "Neutral day (default): camera-matched or neutral curve, light NR above ISO 400, gentle colour and sharpening"
+recipe = "day"
+
+[tone]
+curve_scale = 1.0
+vibrance = 0.02
+# used only when there is no camera JPEG and no usable embedded preview
+neutral = { gain = 2.0, knee = 0.6 }
+
+[nr]
+off_max_iso = 400    # no NR at ISO 400 and below
+chroma_median = 3
+luma_blend = 0.3     # keep more texture than the rich looks
+blend_from = "original"
+strength = [
+  { max_iso = 1000, luma = 3.0, color = 5.0 },
+  { max_iso = 2000, luma = 4.0, color = 7.0 },
+  { max_iso = 3200, luma = 5.0, color = 9.0 },
+  { max_iso = 6400, luma = 7.0, color = 12.0 },
+  {                 luma = 9.0, color = 15.0 },
+]
+
+[nr.hot]             # ISO 6400 and up
+min_iso = 6400
+pre_median = true
+luma_blend = 0.2
+
+[chroma]
+amount = 0.10        # +10% chroma on muted colours
+fade_chroma = 70.0
+white_l = 97.0
+white_width = 12.0
+
+[defringe]           # purple ring around blown lights
+enabled = true
+core_luma = 240.0
+grow_px = 11
+a_start = 6.0
+a_width = 10.0
+b_end = 4.0
+b_width = 10.0
+blur_sigma = 1.5
+strength = 0.6
+
+[ca_fringe]          # purple on high-contrast edges
+enabled = true
+a_start = 7.0
+a_width = 12.0
+b_end = 4.0
+b_width = 14.0
+edge_scale = 22.0
+blur_sigma = 1.5
+strength = 0.5
+b_factor = 0.4
+
+[shadow_lift]        # only on frames named by --shadow-lift
+threshold = 0.18
+max_boost = 1.30
+gamma = 0.85
+
+[sky_match]          # only on frames named by --match (needs a camera JPEG or a big enough preview)
+sample_blueness = 0.2
+mask_start = 0.12
+mask_width = 0.15
+mask_sigma = 3.0
+
+[sharpen]
+radius = 1.0
+percent = 30
+threshold = 4
+
+[export]
+full_quality = 92
+full_chroma = "4:4:4"
+share_long_edge = 2000
+share_quality = 90
+share_chroma = "4:2:0"

@@ -1,0 +1,28 @@
+# Maintainer: Nick Sosa <88122618+nunyabiz765@users.noreply.github.com>
+pkgname=rawdev-bin
+_pkgname=rawdev
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='RAW photo develop engine for scripts and AI agents (prebuilt binary)'
+arch=('x86_64')
+url='https://github.com/nunyabiz765/rawdev'
+license=('MIT OR Apache-2.0')
+depends=('libraw' 'perl-image-exiftool' 'gcc-libs' 'glibc')
+optdepends=('vulkan-icd-loader: GPU noise reduction (--gpu)'
+            'vulkan-radeon: AMD GPUs'
+            'vulkan-intel: Intel GPUs'
+            'nvidia-utils: NVIDIA GPUs')
+provides=('rawdev')
+conflicts=('rawdev')
+options=('!debug' '!strip')
+source=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-x86_64-linux.tar.gz")
+sha256sums=('SKIP')  # replace with the hash from the release's .sha256 file: updpkgsums
+
+package() {
+  cd "$_pkgname-$pkgver-x86_64-linux"
+  install -Dm755 rawdev "$pkgdir/usr/bin/rawdev"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 README.md CHANGELOG.md docs/JSON.md docs/BUILD-WITH-AI.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 looks/*.toml -t "$pkgdir/usr/share/$_pkgname/looks/"
+  install -Dm644 openclaw/rawdev/SKILL.md "$pkgdir/usr/share/$_pkgname/openclaw/rawdev/SKILL.md"
+}

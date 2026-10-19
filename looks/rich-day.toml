@@ -1,0 +1,81 @@
+# rich-day: a rich daylight look. Curve fitted to the camera's own JPEG; NR only above ISO 200;
+# +30% chroma on muted colours; optional sky colour matrix (--match) and shadow lift (--shadow-lift);
+# purple cleanup around blown lights and on high-contrast edges.
+# This file is the reference: the built-in copy produces byte-identical output release to release.
+name = "rich-day"
+description = "Rich day: camera-matched curve, NR above ISO 200, +30% muted chroma, sky matrix, CA cleanup"
+recipe = "day"
+
+[tone]
+curve_scale = 1.0    # no night pull
+vibrance = 0.06
+
+[nr]
+off_max_iso = 200    # clean frames: no NR at ISO 200 and below
+chroma_median = 3
+luma_blend = 0.2
+blend_from = "original"
+strength = [
+  { max_iso = 500,  luma = 3.0,  color = 5.0 },
+  { max_iso = 1000, luma = 4.0,  color = 6.0 },
+  { max_iso = 2000, luma = 6.0,  color = 9.0 },
+  { max_iso = 3200, luma = 7.0,  color = 11.0 },
+  { max_iso = 5000, luma = 9.0,  color = 14.0 },
+  {                 luma = 10.0, color = 18.0 },
+]
+
+[nr.hot]             # ISO 5000 and up
+min_iso = 5000
+pre_median = true
+luma_blend = 0.1
+
+[chroma]             # on --match frames the lift is scaled down where the sky matrix already worked
+amount = 0.30
+fade_chroma = 90.0
+white_l = 97.0
+white_width = 12.0
+
+[defringe]           # always on in the day recipe
+enabled = true
+core_luma = 235.0
+grow_px = 15
+a_start = 4.0
+a_width = 10.0
+b_end = 6.0
+b_width = 10.0
+blur_sigma = 1.5
+strength = 0.8
+
+[ca_fringe]          # purple at high-contrast edges (wing tips, branches against sky)
+enabled = true
+a_start = 5.0
+a_width = 12.0
+b_end = 6.0
+b_width = 14.0
+edge_scale = 22.0
+blur_sigma = 1.5
+strength = 0.70
+b_factor = 0.4
+
+[shadow_lift]        # --shadow-lift frames
+threshold = 0.18     # fades to no change at linear 0.18 (~51% sRGB)
+max_boost = 1.50
+gamma = 0.80
+
+[sky_match]          # --match frames: 3x3 matrix fitted to the camera JPEG on blue sky
+sample_blueness = 0.2
+mask_start = 0.12
+mask_width = 0.15
+mask_sigma = 3.0
+
+[sharpen]
+radius = 1.0
+percent = 45
+threshold = 4
+
+[export]
+full_quality = 92
+full_chroma = "4:4:4"
+share_long_edge = 2000
+share_quality = 90
+share_chroma = "4:2:0"

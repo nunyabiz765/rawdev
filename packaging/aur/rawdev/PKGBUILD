@@ -1,0 +1,47 @@
+# Maintainer: Nick Sosa <88122618+nunyabiz765@users.noreply.github.com>
+pkgname=rawdev
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='RAW photo develop engine for scripts and AI agents: JSON output, dry runs, manifests, safety guards'
+arch=('x86_64' 'aarch64')
+url='https://github.com/nunyabiz765/rawdev'
+license=('MIT OR Apache-2.0')
+depends=('libraw' 'perl-image-exiftool' 'libjpeg-turbo' 'gcc-libs' 'glibc')
+makedepends=('cargo' 'pkgconf')
+optdepends=('vulkan-icd-loader: GPU noise reduction (--gpu)'
+            'vulkan-radeon: AMD GPUs'
+            'vulkan-intel: Intel GPUs'
+            'nvidia-utils: NVIDIA GPUs')
+provides=('rawdev')
+conflicts=('rawdev-bin')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # replace with the real hash after tagging: updpkgsums
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/rawdev "$pkgdir/usr/bin/rawdev"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 README.md CHANGELOG.md docs/JSON.md docs/BUILD-WITH-AI.md docs/DEVELOPING.md \
+    -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 looks/*.toml -t "$pkgdir/usr/share/$pkgname/looks/"
+  install -Dm644 packaging/openclaw/rawdev/SKILL.md "$pkgdir/usr/share/$pkgname/openclaw/rawdev/SKILL.md"
+}
