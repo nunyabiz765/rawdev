@@ -1,6 +1,6 @@
 pkgbase = rawdev
 	pkgdesc = RAW photo develop engine for scripts and AI agents: JSON output, dry runs, manifests, safety guards
-	pkgver = 0.1.0
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/nunyabiz765/rawdev
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = rawdev
 	optdepends = nvidia-utils: NVIDIA GPUs
 	provides = rawdev
 	conflicts = rawdev-bin
-	source = rawdev-0.1.0.tar.gz::https://github.com/nunyabiz765/rawdev/archive/refs/tags/v0.1.0.tar.gz
+	source = rawdev-0.1.2.tar.gz::https://github.com/nunyabiz765/rawdev/archive/refs/tags/v0.1.2.tar.gz
 	sha256sums = SKIP
 
 pkgname = rawdev

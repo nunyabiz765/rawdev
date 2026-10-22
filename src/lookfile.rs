@@ -28,6 +28,8 @@ pub const BUILTIN: &[(&str, &str)] = &[
 pub enum RecipeKind {
     Night,
     Day,
+    /// a float pipeline of ordered `[[step]]`s on LibRaw's display rendering (`layered.rs`)
+    Layered,
 }
 
 impl RecipeKind {
@@ -35,6 +37,7 @@ impl RecipeKind {
         match self {
             RecipeKind::Night => "night",
             RecipeKind::Day => "day",
+            RecipeKind::Layered => "layered",
         }
     }
 }
@@ -46,9 +49,14 @@ pub struct Look {
     #[serde(default)]
     pub description: String,
     pub recipe: RecipeKind,
+    /// night/day recipes (required there; the layered recipe has no tone curve, NR or 8-bit look stages)
+    #[serde(default)]
     pub tone: Tone,
+    #[serde(default)]
     pub nr: Nr,
+    #[serde(default)]
     pub chroma: Chroma,
+    #[serde(default)]
     pub defringe: Defringe,
     /// day recipe only
     pub ca_fringe: Option<CaFringe>,
@@ -56,7 +64,13 @@ pub struct Look {
     pub shadow_lift: Option<ShadowLift>,
     /// day recipe only; needed for `--match`
     pub sky_match: Option<SkyMatch>,
+    #[serde(default)]
     pub sharpen: Sharpen,
+    /// layered recipe only (required there): how the RAW is rendered before the steps
+    pub display: Option<Display>,
+    /// layered recipe only: the `[[step]]` list, run in order
+    #[serde(default)]
+    pub step: Vec<Step>,
     pub export: Export,
     /// the TOML text this look was read from (hashed into the manifest)
     #[serde(skip)]
@@ -247,9 +261,185 @@ pub struct Export {
     pub share_chroma: String,
 }
 
+// ---- defaults for the tables the layered recipe doesn't use (never used by night/day looks: `parse`
+// requires those tables to be written out there) ---------------------------------------------------------
+
+impl Default for Tone {
+    fn default() -> Tone {
+        Tone {
+            curve_scale: 1.0,
+            vibrance: 0.0,
+            neutral: NeutralCurve::default(),
+        }
+    }
+}
+
+impl Default for Nr {
+    /// NR off at every ISO.
+    fn default() -> Nr {
+        Nr {
+            off_max_iso: Some(u32::MAX),
+            chroma_median: 3,
+            luma_blend: 0.0,
+            blend_from: BlendFrom::Original,
+            strength: vec![NrStep {
+                max_iso: None,
+                luma: 0.0,
+                color: 0.0,
+            }],
+            hot: None,
+            strong: None,
+        }
+    }
+}
+
+impl Default for Chroma {
+    /// no lift
+    fn default() -> Chroma {
+        Chroma {
+            amount: 0.0,
+            fade_chroma: 90.0,
+            white_l: 97.0,
+            white_width: 12.0,
+        }
+    }
+}
+
+impl Default for Defringe {
+    fn default() -> Defringe {
+        Defringe {
+            enabled: false,
+            core_luma: 235.0,
+            grow_px: 15,
+            a_start: 4.0,
+            a_width: 10.0,
+            b_end: 6.0,
+            b_width: 10.0,
+            blur_sigma: 1.5,
+            strength: 0.0,
+        }
+    }
+}
+
+impl Default for Sharpen {
+    /// no sharpening
+    fn default() -> Sharpen {
+        Sharpen {
+            radius: 1.0,
+            percent: 0,
+            threshold: 0,
+        }
+    }
+}
+
+/// Layered recipe: how the linear RAW becomes a display image (LibRaw's own rendering: auto white point,
+/// BT.709 curve), and how bright.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Display {
+    /// auto white point: this share of the pixels may land above white (LibRaw's default is 0.01)
+    pub clip_share: f32,
+    /// brightness = (reference mean luma / frame mean luma) ^ match_power, then clamped (1.0 when there
+    /// is no camera reference)
+    pub match_power: f64,
+    pub brightness_min: f64,
+    pub brightness_max: f64,
+    /// optional: a darker rendering blended in where the frame is bright
+    pub highlight_blend: Option<HighlightBlend>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HighlightBlend {
+    /// brightness of the darker rendering, relative to the main one (0.45 = ~1.2 stops)
+    pub darker: f64,
+    /// the blend mask: luma ramp from `mask_black` (none) to `mask_white` (all), then a Gaussian blur
+    pub mask_black: f32,
+    pub mask_white: f32,
+    pub mask_sigma: f64,
+}
+
+/// One layered-recipe step. Values are display-encoded 0..1; Lab `a`/`b` are in their usual units.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Step {
+    /// `(x - black) / (white - black)`, clamped (all channels)
+    Levels { black: f32, white: f32 },
+    /// clip every channel to 0..1 (values may overshoot after sigmoid, saturation, unsharp, Lab)
+    Clamp,
+    /// S-curve: scaled logistic with `contrast` (slope) around `midpoint`
+    Sigmoid { contrast: f32, midpoint: f32 },
+    /// HSL saturation x `amount` and lightness x `lightness`, weighted towards muted colours:
+    /// weight = (1 - S - mask_floor) / (1 - mask_floor), clamped
+    Saturation {
+        amount: f32,
+        lightness: f32,
+        mask_floor: f32,
+    },
+    /// Gaussian blur of the Lab a/b channels only (colour noise and colour speckle)
+    ChromaBlur { sigma: f64 },
+    /// per-channel contrast stretch: clip the darkest `black` and brightest `white` shares of pixels
+    Stretch { black: f64, white: f64 },
+    /// unsharp mask: x + amount * (x - blur), skipped where |2 (x - blur)| < threshold; clamped.
+    /// Large `sigma` = local contrast, small = sharpening
+    Unsharp {
+        sigma: f64,
+        amount: f32,
+        threshold: f32,
+    },
+    /// purple-fringe cleanup: desaturate (to `saturation`) where Lab a ramps `a_start`->`a_end` and
+    /// b ramps `b_start`->`b_end`, blurred by `mask_sigma`, only in the top of the frame (full above
+    /// `top_full`, none below `top_zero`, as fractions of the height) and only on high-contrast edges
+    /// (3x3 luma max - min ramping `edge_start`->`edge_end`, blurred by `edge_sigma`)
+    Fringe {
+        a_start: f32,
+        a_end: f32,
+        b_start: f32,
+        b_end: f32,
+        mask_sigma: f64,
+        top_full: f32,
+        top_zero: f32,
+        edge_start: f32,
+        edge_end: f32,
+        edge_sigma: f64,
+        saturation: f32,
+    },
+    /// smooth the brightest areas (clipped sky): mix in a desaturated (`saturation`), median-filtered
+    /// (`median` px window, 0/1 = none), blurred (`blur` sigma, 0 = none) copy through a mask that is the
+    /// luma ramp `mask_start`->`mask_end`, eroded by a disk of `mask_erode` px (0 = none), blurred by
+    /// `mask_sigma`
+    BrightSmooth {
+        mask_start: f32,
+        mask_end: f32,
+        mask_erode: f32,
+        mask_sigma: f64,
+        saturation: f32,
+        median: usize,
+        blur: f64,
+    },
+}
+
+impl Step {
+    /// The op name (for timings and logs).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Step::Levels { .. } => "levels",
+            Step::Clamp => "clamp",
+            Step::Sigmoid { .. } => "sigmoid",
+            Step::Saturation { .. } => "saturation",
+            Step::ChromaBlur { .. } => "chroma-blur",
+            Step::Stretch { .. } => "stretch",
+            Step::Unsharp { .. } => "unsharp",
+            Step::Fringe { .. } => "fringe",
+            Step::BrightSmooth { .. } => "bright-smooth",
+        }
+    }
+}
+
 impl Look {
     /// Parse and check a look from TOML text.
     pub fn parse(text: &str) -> Result<Look> {
+        check_tables(text)?;
         let mut look: Look = toml::from_str(text)?;
         look.validate()?;
         look.source_text = text.to_string();
@@ -319,6 +509,25 @@ impl Look {
                 );
             }
         }
+        for st in &self.step {
+            let bad = match st {
+                Step::Levels { black, white } => white <= black,
+                Step::BrightSmooth {
+                    mask_start,
+                    mask_end,
+                    median,
+                    ..
+                } => mask_end <= mask_start || (*median > 1 && median % 2 == 0),
+                _ => false,
+            };
+            if bad {
+                return Err(format!(
+                    "step {}: white/end must be above black/start, median an odd size",
+                    st.name()
+                )
+                .into());
+            }
+        }
         if self.recipe == RecipeKind::Night {
             for (set, key) in [
                 (self.ca_fringe.is_some(), "ca_fringe"),
@@ -374,6 +583,35 @@ impl Look {
         }
         Some(p)
     }
+}
+
+/// Which top-level tables a recipe needs and which it must not have (the night/day tables have defaults
+/// only so a layered look can leave them out; a night/day look must still spell every one out).
+fn check_tables(text: &str) -> Result<()> {
+    let t: toml::Table = toml::from_str(text)?;
+    let recipe = t.get("recipe").and_then(|v| v.as_str()).unwrap_or("");
+    const CLASSIC: [&str; 5] = ["tone", "nr", "chroma", "defringe", "sharpen"];
+    const DAY_ONLY: [&str; 3] = ["ca_fringe", "shadow_lift", "sky_match"];
+    const LAYERED: [&str; 2] = ["display", "step"];
+    let (need, forbid): (&[&str], Vec<&str>) = if recipe == "layered" {
+        (
+            &["display"],
+            CLASSIC.iter().chain(&DAY_ONLY).copied().collect(),
+        )
+    } else {
+        (&CLASSIC, LAYERED.to_vec())
+    };
+    for k in need {
+        if !t.contains_key(*k) {
+            return Err(format!("missing [{k}] (needed by the {recipe} recipe)").into());
+        }
+    }
+    for k in forbid {
+        if t.contains_key(k) {
+            return Err(format!("[{k}] is not used by the {recipe} recipe").into());
+        }
+    }
+    Ok(())
 }
 
 /// Look up a built-in look's TOML source.
@@ -536,5 +774,71 @@ mod tests {
         assert!(Look::parse(&good.replace("recipe = \"night\"", "recipe = \"noon\"")).is_err());
         let day = builtin_source("rich-day").unwrap();
         assert!(Look::parse(&day.replace("recipe = \"day\"", "recipe = \"night\"")).is_err());
+    }
+
+    /// A small layered look (the shape of an ImageMagick-prototyped look).
+    const LAYERED: &str = r#"
+name = "t"
+recipe = "layered"
+[display]
+clip_share = 0.01
+match_power = 1.8
+brightness_min = 0.5
+brightness_max = 3.0
+[display.highlight_blend]
+darker = 0.45
+mask_black = 0.6
+mask_white = 0.92
+mask_sigma = 6.0
+[[step]]
+op = "levels"
+black = 0.01
+white = 0.98
+[[step]]
+op = "clamp"
+[[step]]
+op = "bright-smooth"
+mask_start = 0.8
+mask_end = 0.9
+mask_erode = 2.0
+mask_sigma = 2.0
+saturation = 1.0
+median = 15
+blur = 4.0
+[export]
+full_quality = 95
+full_chroma = "4:4:4"
+share_long_edge = 2000
+share_quality = 90
+share_chroma = "4:2:0"
+"#;
+
+    #[test]
+    fn layered_looks_parse_and_are_checked() {
+        let l = Look::parse(LAYERED).unwrap();
+        assert_eq!(l.recipe, RecipeKind::Layered);
+        assert_eq!(l.step.len(), 3);
+        assert_eq!(l.step[2].name(), "bright-smooth");
+        assert!(l.display.as_ref().unwrap().highlight_blend.is_some());
+        // the night/day tables default to "off" and are never used
+        assert!(l.nr_params(6400, false).is_none());
+        // a typo in a step key, an unknown op, a table of another recipe, an even median: errors
+        assert!(Look::parse(&LAYERED.replace("mask_erode", "mask_erod")).is_err());
+        assert!(Look::parse(&LAYERED.replace("op = \"clamp\"", "op = \"clamps\"")).is_err());
+        assert!(
+            Look::parse(&format!(
+                "{LAYERED}\n[sharpen]\nradius = 1.0\npercent = 50\nthreshold = 3\n"
+            ))
+            .is_err()
+        );
+        assert!(Look::parse(&LAYERED.replace("median = 15", "median = 14")).is_err());
+        assert!(Look::parse(&LAYERED.replace("[display]", "[displayx]")).is_err());
+        // night/day looks must still spell out every table, and can't have layered ones
+        let night = builtin_source("rich-night").unwrap();
+        let cut = night.find("[sharpen]").unwrap();
+        let end = night[cut..].find("[export]").unwrap() + cut;
+        let no_sharpen = format!("{}{}", &night[..cut], &night[end..]);
+        assert!(Look::parse(&no_sharpen).is_err());
+        assert!(Look::parse(&format!("{night}\n[[step]]\nop = \"clamp\"\n")).is_err());
     }
 }

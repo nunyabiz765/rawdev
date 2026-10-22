@@ -1,6 +1,6 @@
 # Maintainer: Nick Sosa <88122618+nunyabiz765@users.noreply.github.com>
 pkgname=rawdev
-pkgver=0.1.0
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='RAW photo develop engine for scripts and AI agents: JSON output, dry runs, manifests, safety guards'
 arch=('x86_64' 'aarch64')

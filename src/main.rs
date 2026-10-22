@@ -47,6 +47,8 @@ develop / night / day options:
   --gpu                noise reduction on the GPU (Vulkan); bit-exact with the CPU; falls back to CPU
   --gpu-adapter NAME   pick the adapter whose name contains NAME (implies --gpu)
   --dump-stages        also write every intermediate stage to DIR/stages/<name>/ (raw RGB bytes)
+  --threads N          use at most N CPU threads (default: all). Output is identical either way;
+                       use it to keep a desktop responsive while a batch runs in the background
   per-frame lists (comma-separated names like IMG_0007 or numbers like 7):
   --match LIST         day looks: sky colour matrix fitted to the camera JPEG
   --shadow-lift LIST   day looks: gentle linear-light shadow lift
@@ -175,6 +177,7 @@ const VALUE_OPTS: &[&str] = &[
     "--name",
     "--date",
     "--reject",
+    "--threads",
 ];
 const BOOL_OPTS: &[&str] = &[
     "--json",
@@ -205,6 +208,7 @@ const DEV_OPTS: &[&str] = &[
     "--overwrite",
     "--gpu",
     "--dump-stages",
+    "--threads",
 ];
 
 fn allowed(cmd: Cmd, k: &str) -> bool {
@@ -302,6 +306,33 @@ fn parse(args: Vec<String>) -> R<(Cmd, Opts)> {
         }
     }
     Ok((cmd, o))
+}
+
+/// `--threads N`: size rayon's global pool (all the pixel work) and cap dcraw_emu's OpenMP decode to N.
+/// Without the flag rayon uses every logical CPU (or `RAYON_NUM_THREADS`). Returns the pool size.
+///
+/// Note for scripts: two rawdev batches running side by side share the CPU well (rayon hands out small
+/// work units, so neither batch spins idle); measured 2026-10-21 on 12 threads, two batches at once
+/// finished ~10% sooner than the same batches one after the other. No need to queue them.
+fn set_threads(arg: Option<&str>) -> R<usize> {
+    let Some(s) = arg else {
+        return Ok(rayon::current_num_threads());
+    };
+    let n: usize = s
+        .parse()
+        .ok()
+        .filter(|n| (1..=1024).contains(n))
+        .ok_or_else(|| {
+            usage_err(format!(
+                "--threads needs a whole number from 1 to 1024, not {s}"
+            ))
+        })?;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build_global()
+        .map_err(|e| usage_err(format!("--threads: {e}")))?;
+    decode::set_decode_threads(n);
+    Ok(n)
 }
 
 /// Human-readable progress: stdout normally, stderr when stdout carries JSON. Also appended to
@@ -621,6 +652,7 @@ fn options_json(r: &Recipe) -> Value {
         Recipe::Day(o) => json!({
             "match_sky": o.match_sky, "shadow_lift": o.shadow_lift, "recover_hl": o.recover_hl,
         }),
+        Recipe::Layered => json!({}),
     }
 }
 
@@ -681,7 +713,10 @@ fn frame_flags(
                 .map_err(|e| usage_err(e.to_string()))?;
             let day_used = ff.match_sky || ff.shadow_lift || ff.recover_hl;
             let night_used = ff.strong || ff.nofringe;
-            if (night && day_used) || (!night && night_used) {
+            if (night && day_used)
+                || (!night && night_used)
+                || (look.recipe == RecipeKind::Layered && (day_used || night_used))
+            {
                 return Err(usage_err(format!(
                     "recipe frame {sel}: these options are for the other recipe (look {} is {})",
                     look.name,
@@ -731,6 +766,7 @@ fn frame_flags(
 
 fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
     let dry = o.has("--dry-run");
+    let threads = set_threads(o.get("--threads"))?;
     let config = tools::load_config()?;
 
     // ---- the look -------------------------------------------------------------------------------
@@ -772,6 +808,12 @@ fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
         ("--strong", true),
         ("--nofringe", true),
     ] {
+        if o.get(flag).is_some() && look.recipe == RecipeKind::Layered {
+            return Err(usage_err(format!(
+                "{flag} is for night/day looks; look {} is a layered look (its choices are in the look file)",
+                look.name
+            )));
+        }
         if o.get(flag).is_some() && for_night != night {
             return Err(usage_err(format!(
                 "{flag} is for {} looks; look {} is a {} look",
@@ -846,7 +888,9 @@ fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
         inputs.iter().zip(&stems).zip(metas).zip(outs)
     {
         let f = flags.get(stem).copied().unwrap_or_default();
-        let recipe = if night {
+        let recipe = if look.recipe == RecipeKind::Layered {
+            Recipe::Layered
+        } else if night {
             Recipe::Night(FrameOptions {
                 defringe: !f.nofringe,
                 strong_nr: f.strong,
@@ -971,12 +1015,12 @@ fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
     ev.emit(
         "batch_start",
         json!({ "rawdev_version": VERSION, "command": command, "dry_run": false,
-                "look": look_json, "out": out, "frames": planned.len(), "gpu": gpu_name,
+                "look": look_json, "out": out, "frames": planned.len(), "gpu": gpu_name, "threads": threads,
                 "tools": tools_json(&ex, &dc) }),
     );
     let batch_start = Instant::now();
     human.log(&format!(
-        "rawdev {command} batch start ({} frames, look {}{nlm_on})",
+        "rawdev {command} batch start ({} frames, look {}, {threads} threads{nlm_on})",
         planned.len(),
         look.name
     ))?;
@@ -1119,6 +1163,7 @@ fn log_line(job: &FrameJob, rep: &FrameReport, secs: f64, decode_secs: f64) -> S
             parts.extend(rep.notes.iter().map(|s| s.to_string()));
             format!("{} nr={nr}", parts.join(" "))
         }
+        Recipe::Layered => format!("{curve} layered"),
     };
     format!(
         "{} done iso={} clipG={:.3} {recipe} size=({}, {}) {:.1}s [decode {:.2} (background) | {}]",

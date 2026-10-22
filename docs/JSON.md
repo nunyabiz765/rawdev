@@ -33,9 +33,9 @@ A run prints `batch_start`, then one `frame_done` / `frame_failed` per frame (or
 ### `batch_start`
 
 ```json
-{"v":1,"event":"batch_start","rawdev_version":"0.1.0","command":"develop","dry_run":false,
+{"v":1,"event":"batch_start","rawdev_version":"0.1.2","command":"develop","dry_run":false,
  "look":{"name":"neutral-day","recipe":"day","origin":"builtin","sha256":"…"},
- "out":"developed","frames":9,"gpu":"NVIDIA GeForce RTX 2060 (Vulkan)",
+ "out":"developed","frames":9,"gpu":"NVIDIA GeForce RTX 2060 (Vulkan)","threads":12,
  "tools":{"exiftool":{"path":"/usr/bin/vendor_perl/exiftool","version":"13.55"},
           "dcraw_emu":{"path":"/usr/bin/dcraw_emu","version":"LibRaw 0.22.2"}}}
 ```
@@ -44,6 +44,8 @@ A run prints `batch_start`, then one `frame_done` / `frame_failed` per frame (or
   runs with the same hash used the same settings.
 - `gpu`: `null` without `--gpu`; the adapter name; or `"cpu (no usable GPU)"` when `--gpu` was asked
   for but no GPU could be opened (the run continues on the CPU, with identical output).
+- `threads` (0.1.1+): CPU threads the batch may use: the `--threads` value, else every logical CPU (or
+  `RAYON_NUM_THREADS`). Output is identical at any value.
 
 ### `frame_planned` (dry run only)
 
@@ -58,7 +60,7 @@ A run prints `batch_start`, then one `frame_done` / `frame_failed` per frame (or
 ```
 
 - `options`: day looks have `match_sky`, `shadow_lift`, `recover_hl`; night looks have `defringe`,
-  `strong_nr`.
+  `strong_nr`; layered looks (0.1.2+) have none (`{}`), and their `nr` is `null`.
 - `tone_ref` (the plan): `sidecar` (a camera JPEG next to the RAW), `preview` (the RAW's embedded
   JPEG, tried biggest first), or `neutral` (the fixed curve). In `frame_done` it becomes what was
   actually used, e.g. `preview:JpgFromRaw`, or `neutral` if no preview passed the size/aspect checks.
@@ -111,7 +113,7 @@ atomically (temp file + rename), so it is never half-written.
   "rawdev_manifest": 1,
   "runs": [
     {
-      "rawdev_version": "0.1.0",
+      "rawdev_version": "0.1.2",
       "command": "develop",
       "argv": ["develop", "--out", "developed", "card"],
       "started": "2026-10-18T19:27:35Z",

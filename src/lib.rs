@@ -16,6 +16,7 @@ pub mod export;
 pub mod gpu;
 pub mod image;
 pub mod ingest;
+pub mod layered;
 pub mod look;
 pub mod lookfile;
 pub mod manifest;

@@ -1,6 +1,33 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.2 (2026-10-21)
+
+- New `layered` recipe (`recipe = "layered"` in a look file): LibRaw's display rendering (auto white
+  point, BT.709 curve, brightness matched to the camera JPEG, optional darker rendering blended into the
+  highlights) followed by an ordered `[[step]]` list of float operations: `levels`, `sigmoid`,
+  `saturation`, `chroma-blur`, `stretch`, `unsharp`, `fringe`, `bright-smooth`, `clamp`. The maths
+  follows ImageMagick 7 Q16-HDRI (Gaussian kernel construction, Lab/HSL formulas, which operators clamp
+  and which don't), so an ImageMagick-prototyped develop can be carried over as a look file: a
+  seven-command `magick` develop was reproduced at 44–56 dB PSNR (SSIM ≥ 0.994, mean ΔE2000 ≤ 0.25) on
+  39 tuning and held-out 24 MP frames, ~3.7 s per frame instead of ~2.5 min.
+- The new stages only run in layered looks. The four built-in looks are unchanged: every output of
+  `neutral-day`, `neutral-night`, `rich-day` and `rich-night` (with `--match`, `--shadow-lift`,
+  `--recover-hl`, `--strong`, `--nofringe`) is byte-identical to 0.1.1.
+- Look files: the night/day tables (`tone`, `nr`, `chroma`, `defringe`, `sharpen`) are still required in
+  night/day looks and are refused in layered looks; `[display]` / `[[step]]` the other way round.
+- `--dump-stages` on a layered look writes a 16-bit PPM after every step.
+
+## 0.1.1 (not released on its own; included in 0.1.2)
+
+- `--threads N` for `develop` / `night` / `day`: use at most N CPU threads (the pixel work and LibRaw's
+  decode). Default is still every logical CPU. Output is byte-identical at any thread count (checked at
+  12, 3 and 1 thread on 24 MP night frames with NR on). `batch_start` gains a `threads` field and the
+  progress log names the thread count.
+- Docs: running batches side by side is fine. Two rawdev batches at once finished ~10% sooner than the
+  same batches one after the other (12 threads; 46.9 s vs 42.6 s, NR-heavy night frames), so there is
+  no need to queue them. Use `--threads` when the point is to leave room for other work, not for speed.
+
+## 0.1.0 (2026-10-18)
 
 First public release.
 

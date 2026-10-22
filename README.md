@@ -14,14 +14,14 @@ the GPU; that path is designed to be bit-exact with the CPU, not just close.
 
 Download the tarball and its checksum from the [Releases](../../releases) page. The main build needs a
 CPU with AVX2 (x86-64-v3: Intel Haswell / AMD Excavator, ~2015, or newer); for older CPUs use
-`rawdev-0.1.0-x86_64-baseline-linux.tar.gz` instead (same output, ~20% slower noise reduction).
+`rawdev-0.1.2-x86_64-baseline-linux.tar.gz` instead (same output, ~20% slower noise reduction).
 
 ```sh
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.0/rawdev-0.1.0-x86_64-linux.tar.gz
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.0/rawdev-0.1.0-x86_64-linux.tar.gz.sha256
-sha256sum -c rawdev-0.1.0-x86_64-linux.tar.gz.sha256
-tar xzf rawdev-0.1.0-x86_64-linux.tar.gz
-install -Dm755 rawdev-0.1.0-x86_64-linux/rawdev ~/.local/bin/rawdev
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.2/rawdev-0.1.2-x86_64-linux.tar.gz
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.2/rawdev-0.1.2-x86_64-linux.tar.gz.sha256
+sha256sum -c rawdev-0.1.2-x86_64-linux.tar.gz.sha256
+tar xzf rawdev-0.1.2-x86_64-linux.tar.gz
+install -Dm755 rawdev-0.1.2-x86_64-linux/rawdev ~/.local/bin/rawdev
 ```
 
 The binary is built on Debian 12 (glibc 2.36), so it runs on that or anything newer (Ubuntu 24.04,
@@ -163,6 +163,46 @@ rawdev develop --look mine.toml --out developed ~/Photos/card/*.NEF
 
 Unknown keys in a look file are errors, so a typo doesn't get silently ignored.
 
+### The layered recipe
+
+The built-in looks use the `night` and `day` recipes: a tone curve fitted to the camera's JPEG, then
+8-bit noise reduction and colour stages. A look can instead say `recipe = "layered"`: LibRaw's own
+display rendering (BT.709 curve, auto white point, brightness matched to the camera JPEG, optionally a
+darker rendering blended into the highlights), followed by an ordered list of float steps, like layers
+in an image editor:
+
+```toml
+recipe = "layered"
+
+[display]
+clip_share = 0.01          # auto white: 1% of pixels may land above white
+match_power = 1.8          # brightness = (camera JPEG mean / frame mean) ^ 1.8 ...
+brightness_min = 0.5       # ... clamped
+brightness_max = 3.0
+
+[[step]]
+op = "levels"
+black = 0.01
+white = 0.98
+
+[[step]]
+op = "sigmoid"
+contrast = 3.0
+midpoint = 0.45
+```
+
+Steps: `levels`, `sigmoid`, `saturation` (HSL, weighted towards muted colours), `chroma-blur` (Lab
+a/b), `stretch` (per-channel contrast stretch), `unsharp` (large sigma = local contrast, small =
+sharpening), `fringe` (purple-fringe desaturation in the top of the frame, on edges only),
+`bright-smooth` (median-smooth clipped skies and bright areas), and `clamp`. Every parameter is
+documented in `src/lookfile.rs` (`enum Step`). The maths follows ImageMagick 7 (Q16 HDRI) operator for
+operator, Gaussian kernels and Lab/HSL formulas included, so a look first prototyped as a `magick`
+pipeline can be moved over and give the same picture: a seven-command ImageMagick develop (24 MP,
+~2.5 min per frame) was reproduced at 44–56 dB PSNR (SSIM ≥ 0.994, mean ΔE2000 ≤ 0.25) on 39 frames,
+~3.7 s each. Values may go above 1 or below 0 between steps, as in ImageMagick's HDRI build; `clamp` is
+where a `magick` pipeline would have written a 16-bit file. Layered looks have no per-frame flags (`--match`, `--strong`, ...): make a second look
+file for frames that need different settings.
+
 Per-frame choices (`--match`, `--shadow-lift`, `--recover-hl` for day looks; `--strong`, `--nofringe`
 for night looks) can also go in a recipe file instead of flags:
 
@@ -196,6 +236,8 @@ Environment variables: `RAWDEV_EXIFTOOL`, `RAWDEV_DCRAW_EMU` (override the tool 
 ## For agents
 
 - `docs/JSON.md` — the full JSON event and manifest schema, with exit codes.
+- Background batches: add `--threads N` (e.g. half the CPU's threads) to leave room for the user. Two
+  batches may run at the same time; there's no need to queue them (see "Benchmarks").
 - The OpenClaw skill at `packaging/openclaw/rawdev/SKILL.md` covers card ingest, culling, and
   developing from an agent.
 - `docs/BUILD-WITH-AI.md` — a prompt for handing this project's spec to a coding agent.
@@ -264,6 +306,12 @@ decode, exiftool and JPEG encode; "NR" is the noise-reduction step alone, per fr
 - **CPU builds:** the release binary is built for x86-64-v3 (AVX2), which measured the same as a
   `-C target-cpu=native` build here (23.1–23.4 s vs 23.1–23.5 s on the night batch). The baseline x86-64
   build is about 22% slower on NR-heavy frames (28.8–29.1 s). All three produce byte-identical output.
+- **Threads and parallel batches** (measured 2026-10-21, same machine): `--threads N` caps a batch at N CPU threads; output is byte-identical
+  at any count. The 3-frame night batch took 23.0 s on all 12 threads and 44.9 s with `--threads 3`; one
+  frame alone took 41.2 s with `--threads 1`. Two batches started side by side share the CPU well and
+  finished ~10% sooner than running them one after the other (42.6 s vs 46.9 s for 3 + 3 night frames;
+  10.2 s vs 12.8 s for 4 + 4 low-ISO day frames), so scripts don't need to queue batches. Use
+  `--threads` to keep a desktop responsive, not to go faster.
 - For scale: the Python/numpy/OpenCV prototype this engine was ported from took 75–130 s per 24 MP night
   frame on the same machine; rawdev's CPU path is about 8 s, with the same output to within rounding.
 

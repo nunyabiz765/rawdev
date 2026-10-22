@@ -161,6 +161,9 @@ fn bad_arguments_are_exit_2() {
         ], // day flag on a night look
         vec!["night".into(), "--look".into(), "rich-day".into()],
         vec!["ingest".into(), "--out".into(), "x".into()],
+        vec!["develop".into(), "--threads".into(), "0".into()],
+        vec!["develop".into(), "--threads".into(), "many".into()],
+        vec!["ingest".into(), "--threads".into(), "2".into()], // develop-only option
     ];
     for c in cases {
         let o = rawdev().args(&c).arg("--json").output().unwrap();

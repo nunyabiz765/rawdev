@@ -5,6 +5,7 @@ use crate::day::{self, DayOptions};
 use crate::decode::{self, Highlights};
 use crate::export::{self, Chroma};
 use crate::image::Rgb8;
+use crate::layered;
 use crate::look::{self, NrParams};
 use crate::lookfile::Look;
 use crate::pillow::{self, Filter};
@@ -27,6 +28,8 @@ pub struct FrameOptions {
 pub enum Recipe {
     Night(FrameOptions),
     Day(DayOptions),
+    /// the layered recipe has no per-frame choices: everything is in the look's steps
+    Layered,
 }
 
 impl Recipe {
@@ -129,7 +132,48 @@ pub fn develop(job: &FrameJob, look: &Look, raw: decode::Linear16) -> Result<Fra
     match job.recipe {
         Recipe::Night(o) => develop_night(job, look, o, raw),
         Recipe::Day(o) => develop_day(job, look, o, raw),
+        Recipe::Layered => develop_layered(job, look, raw),
     }
+}
+
+/// The layered recipe: LibRaw's display rendering, then the look's steps in order (see `layered.rs`).
+fn develop_layered(job: &FrameJob, look: &Look, raw: decode::Linear16) -> Result<FrameReport> {
+    let mut t = Timer {
+        timings: Vec::new(),
+    };
+    if let Some(d) = &job.stage_dir {
+        std::fs::create_dir_all(d)?;
+    }
+    let display = look
+        .display
+        .as_ref()
+        .ok_or("layered look without [display]")?;
+    let reference = load_reference(&mut t, job, &raw)?;
+    let tone_source = source_of(&reference);
+    let (mut img, d) = t.step("display", || {
+        layered::render(&raw, display, reference.as_ref().map(|r| &r.image))
+    });
+    drop(reference);
+    drop(raw);
+    let dump16 = |name: &str, p: &layered::Planes| -> Result<()> {
+        if let Some(dir) = &job.stage_dir {
+            std::fs::write(dir.join(format!("{name}.ppm")), p.to_ppm16())?;
+        }
+        Ok(())
+    };
+    dump16("s00_display", &img)?;
+    for (i, step) in look.step.iter().enumerate() {
+        t.step(step.name(), || layered::apply(&mut img, step));
+        dump16(&format!("s{:02}_{}", i + 1, step.name()), &img)?;
+    }
+    let out = t.step("8-bit", || img.to_rgb8());
+    drop(img);
+    let info = tone::ToneInfo {
+        clip_g: d.clip_g,
+        curve: format!("display white={} b={:.3}", d.white, d.brightness),
+        lut: Vec::new(),
+    };
+    export_tail(job, look, out, t, info, None, Vec::new(), tone_source)
 }
 
 /// The night recipe (ported from the Python night prototype).
@@ -298,7 +342,21 @@ fn finish(
         pillow::unsharp_mask(&img, s.radius, s.percent, s.threshold)
     });
     dump(&job.stage_dir, "s5_usm", &img)?;
+    export_tail(job, look, img, t, info, nr, notes, tone_source)
+}
 
+/// Share copy, JPEG encodes, EXIF/GPS copy.
+#[allow(clippy::too_many_arguments)]
+fn export_tail(
+    job: &FrameJob,
+    look: &Look,
+    img: Rgb8,
+    mut t: Timer,
+    info: tone::ToneInfo,
+    nr: Option<NrParams>,
+    notes: Vec<&'static str>,
+    tone_source: String,
+) -> Result<FrameReport> {
     let share = t.step("share resize", || {
         let n = look.export.share_long_edge;
         pillow::thumbnail(&img, n, n, Filter::Lanczos)

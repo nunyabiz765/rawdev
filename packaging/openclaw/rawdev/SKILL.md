@@ -69,7 +69,9 @@ homepage above. Don't guess at a package manager you haven't verified.
    reduction settings, or `null` if off at that ISO), and `outputs` (destination paths) before
    running for real.
 3. Run for real with `--json` (same flags, minus `--dry-run`). Add `--gpu` only if `rawdev gpus
-   --json` lists a real adapter (not just llvmpipe/software).
+   --json` lists a real adapter (not just llvmpipe/software). If the user is working on the same
+   machine, add `--threads N` (about half the CPU's threads) so the desktop stays responsive; the
+   output is identical. Two batches may run at once; don't queue them.
 4. Parse `frame_done` / `frame_failed` events as they stream. Report each output path from
    `frame_done.outputs[].path`, and surface any `frame_failed.error` to the user rather than
    retrying silently.

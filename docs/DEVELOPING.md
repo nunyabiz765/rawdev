@@ -23,6 +23,7 @@ src/
   day.rs      the day recipe's extra stages: sky matrix, shadow lift, CA fringe pass
   look.rs     noise_reduction, chroma_lift, defringe: the look stages both recipes share
   lookfile.rs the look-file format (serde + toml): structs, loading, validation, NR table lookup
+  layered.rs  the layered recipe: LibRaw display rendering + float steps that follow ImageMagick 7 HDRI
   nlm.rs      non-local means denoising, from scratch, multithreaded (the CPU reference)
   nlm.wgsl    the GPU compute shader (WGSL) that gpu.rs compiles at startup
   gpu.rs      the same NLM on the GPU through wgpu (--gpu): device setup, buffers, dispatch, readback
@@ -30,7 +31,7 @@ src/
   pillow.rs   bit-exact ports of the PIL pieces: thumbnail/resize/reduce, box blur, unsharp mask
   reference.rs the tone reference: sidecar JPEG, embedded preview, or neutral curve
   export.rs   JPEG read/write (libjpeg-turbo), ICC insertion, exiftool calls
-  develop.rs  one frame start to finish (night or day), timing each step
+  develop.rs  one frame start to finish (night, day or layered), timing each step
   recipe.rs   per-frame choices: command-line selector lists and the recipe.toml format
   manifest.rs the --json event lines and the run manifest: hashing, timestamps, atomic writes
   safety.rs   the write guards: protected folders, dev/ detection, symlink resolution
@@ -146,6 +147,32 @@ Not ported, on purpose: automatic horizon-leveling/rotation, and anything that w
 frame. Those are rejected at the command line (see the README's "Safety" section), not quietly skipped —
 there is no code path for them at all. This is a project rule, not a default that a flag can override.
 
+
+## The layered recipe, step by step
+
+A different engine for looks first written as an ImageMagick pipeline. No tone-curve fit, no NLM: the
+look file lists the steps.
+
+| Step | Module |
+|---|---|
+| Decode RAW (same `dcraw_emu` linear decode as the other recipes) | `decode.rs` |
+| Auto white point from the 8192-bin histogram (LibRaw `write_ppm_tiff`) | `layered::auto_white` |
+| BT.709 display curve (LibRaw `gamma_curve`), brightness `(ref mean / frame mean)^power` | `layered::display_curve`, `render` |
+| Optional darker rendering blended in through a blurred luma mask | `layered::render` |
+| The `[[step]]` list, in order, on f32 planes (values may leave 0..1 until a `clamp`) | `layered::apply` |
+| 8-bit rounding, full + share JPEG export, EXIF/GPS copy | `develop::export_tail` |
+
+What makes it match ImageMagick (each found by comparing against `magick` intermediates): the Gaussian
+kernel is built ImageMagick's way (`kernel_width`, sampled at thirds of a pixel); `-level` clamps but
+`-sigmoidal-contrast`, `-unsharp` and `-modulate` don't (HDRI); Lab → sRGB lifts all channels by the
+most negative one when out of gamut; `-contrast-stretch` with `-channel RGB` is per channel on a
+65536-bin histogram; `-statistic median` takes index n/2 of the 16-bit window (sliding histogram here).
+
+What can't match pixel for pixel: HSL saturation is `c / (2 - 2L)` above mid-grey, so where a large
+`unsharp` pushes a near-white pixel's lightness to 1.00001 the saturation jumps to about -20 and a
+following `saturation` step turns it pink or green; at 0.99999 it is left alone. Which side a pixel lands
+on depends on the last bits of everything before it (ImageMagick's sRGB decode uses an approximate pow),
+so both engines produce these specks along dark edges against blown sky, but not on the same pixels.
 ## The GPU path and why it's bit-exact
 
 **Compute shaders and wgpu, briefly.** A GPU runs one small program (a *shader*) on thousands of threads

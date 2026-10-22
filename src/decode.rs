@@ -9,6 +9,15 @@ use crate::Result;
 use rayon::prelude::*;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Thread cap for dcraw_emu's OpenMP decode (`--threads N`); 0 = let OpenMP decide (all cores).
+static DECODE_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// Cap the threads dcraw_emu may use (passed to it as `OMP_NUM_THREADS`). 0 = no cap.
+pub fn set_decode_threads(n: usize) {
+    DECODE_THREADS.store(n, Ordering::Relaxed);
+}
 
 /// The dcraw_emu flags from develop.py, in the same order:
 ///   -w        camera white balance
@@ -55,8 +64,11 @@ pub fn decode_raw_with(raw: &Path, hl: Highlights) -> Result<Linear16> {
         Highlights::Blend => "2",
     };
     let mut cmd = Command::new(crate::tools::dcraw_emu());
+    let cap = DECODE_THREADS.load(Ordering::Relaxed);
     if needs_single_thread(raw) {
         cmd.env("OMP_NUM_THREADS", "1");
+    } else if cap > 0 {
+        cmd.env("OMP_NUM_THREADS", cap.to_string());
     }
     let out = cmd
         .args(flags)
