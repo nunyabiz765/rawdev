@@ -3,8 +3,9 @@
 # most current distros), with libjpeg-turbo built from source and linked statically. Two builds:
 #
 #   rawdev-VERSION-x86_64-linux.tar.gz           x86-64-v3 (AVX2; any x86-64 CPU from ~2015 on). As fast
-#                                                as a -C target-cpu=native build on a Zen 4.
-#   rawdev-VERSION-x86_64-baseline-linux.tar.gz  plain x86-64, for older CPUs (~20% slower NR)
+#                                                as a -C target-cpu=native build on a Zen 4 (measured
+#                                                on 0.1.0).
+#   rawdev-VERSION-x86_64-baseline-linux.tar.gz  plain x86-64, for older CPUs (~1.5x slower NR-heavy batches)
 #
 #   packaging/release.sh [OUTDIR]        (default: dist/)
 #
@@ -35,7 +36,7 @@ for v in "x86-64-v3:x86_64-linux" "x86-64:x86_64-baseline-linux"; do
   STAGE=$(mktemp -d)
   mkdir -p "$STAGE/$NAME/docs" "$STAGE/$NAME/looks" "$STAGE/$NAME/openclaw/rawdev"
   cp "$SRC/target/$cpu/release/rawdev" "$STAGE/$NAME/"
-  (cd "$SRC" && cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "$STAGE/$NAME/" && cp docs/JSON.md docs/BUILD-WITH-AI.md "$STAGE/$NAME/docs/" && cp looks/*.toml "$STAGE/$NAME/looks/" && cp packaging/openclaw/rawdev/SKILL.md "$STAGE/$NAME/openclaw/rawdev/")
+  (cd "$SRC" && cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "$STAGE/$NAME/" && cp docs/JSON.md docs/BUILD-WITH-AI.md docs/PERF.md "$STAGE/$NAME/docs/" && cp looks/*.toml "$STAGE/$NAME/looks/" && cp packaging/openclaw/rawdev/SKILL.md "$STAGE/$NAME/openclaw/rawdev/")
   tar -C "$STAGE" --owner=0 --group=0 --sort=name -czf "$OUT/$NAME.tar.gz" "$NAME"
   rm -rf "$STAGE"
   (cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" && cat "$NAME.tar.gz.sha256")

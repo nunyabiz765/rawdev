@@ -302,65 +302,143 @@ fn box_blur_line(src: &[u8], dst: &mut [u8], n: usize, stride: usize, radius: f3
     let ww = ((1u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u32;
     let fw = ((1u32 << 24) - (whole as u32 * 2 + 1) * ww) / 2;
     let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize * stride] as u32;
-    for x in 0..n as isize {
+    let edge = |x: isize, dst: &mut [u8]| {
         let mut inner = 0u32;
         for k in -whole..=whole {
             inner += at(x + k);
         }
         let v = inner * ww + (at(x - whole - 1) + at(x + whole + 1)) * fw;
         dst[x as usize * stride] = ((v + (1 << 23)) >> 24) as u8;
+    };
+    // Away from the ends no index needs clamping, and the inner sum can slide along the line (add the
+    // sample entering the box, drop the one leaving it): whole-number sums, so the result is the same.
+    let lo = whole + 1;
+    let hi = n as isize - whole - 1; // interior: lo <= x < hi
+    if lo >= hi {
+        for x in 0..n as isize {
+            edge(x, dst);
+        }
+        return;
+    }
+    for x in 0..lo {
+        edge(x, dst);
+    }
+    let s = |i: isize| src[i as usize * stride] as u32;
+    let mut inner: u32 = (lo - whole..=lo + whole).map(s).sum();
+    for x in lo..hi {
+        if x > lo {
+            inner = inner + s(x + whole) - s(x - whole - 1);
+        }
+        let v = inner * ww + (s(x - whole - 1) + s(x + whole + 1)) * fw;
+        dst[x as usize * stride] = ((v + (1 << 23)) >> 24) as u8;
+    }
+    for x in hi..n as isize {
+        edge(x, dst);
     }
 }
 
+/// The weights of one box pass of fractional radius r (see [`box_blur_line`]): whole part, inner weight
+/// `ww`, edge weight `fw` (1/2^24 units).
+fn box_weights(radius: f32) -> (usize, u32, u32) {
+    let whole = radius as usize;
+    let ww = ((1u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u32;
+    let fw = ((1u32 << 24) - (whole as u32 * 2 + 1) * ww) / 2;
+    (whole, ww, fw)
+}
+
+/// One box pass written as sums of whole shifted lines: `dst[i] = box of src_k[i]` where `src_k` is the
+/// line `k` steps away (k = -whole-1 ..= whole+1; the outermost two get the edge weight). Every sample
+/// does the same sums as [`box_blur_line`], but along the line instead of along the box, which the
+/// compiler turns into SIMD instructions.
+fn box_sum_lines(lines: &[&[u8]], dst: &mut [u8], ww: u32, fw: u32) {
+    let k = lines.len(); // 2 * whole + 3
+    const CHUNK: usize = 64;
+    let mut inner = [0u32; CHUNK];
+    for i0 in (0..dst.len()).step_by(CHUNK) {
+        let n = CHUNK.min(dst.len() - i0);
+        inner[..n].fill(0);
+        for l in &lines[1..k - 1] {
+            for (a, &v) in inner[..n].iter_mut().zip(&l[i0..i0 + n]) {
+                *a += v as u32;
+            }
+        }
+        let (first, last) = (&lines[0][i0..i0 + n], &lines[k - 1][i0..i0 + n]);
+        for j in 0..n {
+            let v = inner[j] * ww + (first[j] as u32 + last[j] as u32) * fw;
+            dst[i0 + j] = ((v + (1 << 23)) >> 24) as u8;
+        }
+    }
+}
+
+/// One horizontal box pass over an interleaved RGB row of `w` pixels.
+fn box_blur_row(src: &[u8], dst: &mut [u8], w: usize, radius: f32) {
+    let (whole, ww, fw) = box_weights(radius);
+    let reach = whole + 1;
+    if w <= 2 * reach {
+        for c in 0..3 {
+            box_blur_line(&src[c..], &mut dst[c..], w, 3, radius);
+        }
+        return;
+    }
+    // the ends (where the box reaches past the row and indices are clamped) sample by sample
+    for c in 0..3 {
+        for x in (0..reach).chain(w - reach..w) {
+            dst[x * 3 + c] = box_blur_at(src, c, x, w, whole, ww, fw);
+        }
+    }
+    // the middle: pixel x's box covers pixels x-reach..=x+reach, so line k is src shifted by k pixels
+    let (a, b) = (reach * 3, (w - reach) * 3);
+    let lines: Vec<&[u8]> = (0..=2 * reach)
+        .map(|k| &src[k * 3..k * 3 + b - a])
+        .collect();
+    box_sum_lines(&lines, &mut dst[a..b], ww, fw);
+}
+
+/// [`box_blur_line`]'s sum for one sample (channel c of pixel x), with clamped indices.
+fn box_blur_at(src: &[u8], c: usize, x: usize, n: usize, whole: usize, ww: u32, fw: u32) -> u8 {
+    let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize * 3 + c] as u32;
+    let (x, whole) = (x as isize, whole as isize);
+    let inner: u32 = (-whole..=whole).map(|k| at(x + k)).sum();
+    let v = inner * ww + (at(x - whole - 1) + at(x + whole + 1)) * fw;
+    ((v + (1 << 23)) >> 24) as u8
+}
+
 /// `ImageFilter.GaussianBlur(radius)` as Pillow does it: 3 horizontal box passes, then 3 vertical ones,
-/// each rounded to 8 bits.
+/// each rounded to 8 bits. A vertical pass is the same box sum with whole rows as the lines (rows
+/// clamped at the top and bottom), so it needs no transposing.
 pub fn gaussian_blur(img: &Rgb8, radius: f32) -> Rgb8 {
     let passes = 3;
     let r = gaussian_blur_radius(radius, passes);
     let (w, h) = (img.width, img.height);
+    let row = w * 3;
     let mut cur = img.clone();
     for _ in 0..passes {
         let mut next = Rgb8::new(w, h);
         next.data
-            .par_chunks_mut(w * 3)
-            .zip(cur.data.par_chunks(w * 3))
-            .for_each(|(o, s)| {
-                for c in 0..3 {
-                    box_blur_line(&s[c..], &mut o[c..], w, 3, r);
-                }
+            .par_chunks_mut(row)
+            .zip(cur.data.par_chunks(row))
+            .for_each(|(o, s)| box_blur_row(s, o, w, r));
+        cur = next;
+    }
+    let (whole, ww, fw) = box_weights(r);
+    let reach = (whole + 1) as isize;
+    for _ in 0..passes {
+        let mut next = Rgb8::new(w, h);
+        next.data
+            .par_chunks_mut(row)
+            .enumerate()
+            .for_each(|(y, o)| {
+                let lines: Vec<&[u8]> = (-reach..=reach)
+                    .map(|k| {
+                        let sy = (y as isize + k).clamp(0, h as isize - 1) as usize;
+                        &cur.data[sy * row..][..row]
+                    })
+                    .collect();
+                box_sum_lines(&lines, o, ww, fw);
             });
         cur = next;
     }
-    // Vertical passes: work on a transposed copy so each column becomes a contiguous row (this is
-    // what Pillow does too, and it's much kinder to the CPU cache than striding down columns).
-    let mut t = transpose(&cur);
-    for _ in 0..passes {
-        let mut next = Rgb8::new(t.width, t.height);
-        next.data
-            .par_chunks_mut(t.width * 3)
-            .zip(t.data.par_chunks(t.width * 3))
-            .for_each(|(o, s)| {
-                for c in 0..3 {
-                    box_blur_line(&s[c..], &mut o[c..], t.width, 3, r);
-                }
-            });
-        t = next;
-    }
-    transpose(&t)
-}
-
-fn transpose(img: &Rgb8) -> Rgb8 {
-    let (w, h) = (img.width, img.height);
-    let mut out = Rgb8::new(h, w);
-    out.data
-        .par_chunks_mut(h * 3)
-        .enumerate()
-        .for_each(|(x, o)| {
-            for y in 0..h {
-                o[y * 3..y * 3 + 3].copy_from_slice(&img.data[(y * w + x) * 3..][..3]);
-            }
-        });
-    out
+    cur
 }
 
 /// `ImageFilter.UnsharpMask(radius, percent, threshold)`: where a pixel differs from its blurred self by
@@ -403,6 +481,92 @@ mod tests {
         same("lanczos", &thumbnail(&c, 200, 200, Filter::Lanczos));
         same("reduce3", &reduce(&c, 3, 3));
         same("thumb_bicubic", &thumbnail(&c, 80, 80, Filter::Bicubic));
+    }
+
+    /// The sliding box blur against the plain one (every sample summed with clamped indices), for
+    /// lines shorter than the box, around it, and long; whole and fractional radii; both strides.
+    #[test]
+    fn box_blur_line_matches_plain() {
+        fn plain(src: &[u8], dst: &mut [u8], n: usize, stride: usize, radius: f32) {
+            let whole = radius as isize;
+            let ww = ((1u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u32;
+            let fw = ((1u32 << 24) - (whole as u32 * 2 + 1) * ww) / 2;
+            let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize * stride] as u32;
+            for x in 0..n as isize {
+                let inner: u32 = (-whole..=whole).map(|k| at(x + k)).sum();
+                let v = inner * ww + (at(x - whole - 1) + at(x + whole + 1)) * fw;
+                dst[x as usize * stride] = ((v + (1 << 23)) >> 24) as u8;
+            }
+        }
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        for n in [1usize, 2, 3, 4, 5, 6, 7, 9, 16, 101, 1000] {
+            for radius in [0.0f32, 0.4, 1.0, 1.37, 2.0, 2.9, 4.5] {
+                for stride in [1usize, 3] {
+                    let src: Vec<u8> = (0..n * stride)
+                        .map(|_| {
+                            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            (seed >> 56) as u8
+                        })
+                        .collect();
+                    let mut a = vec![0u8; n * stride];
+                    let mut b = vec![0u8; n * stride];
+                    box_blur_line(&src, &mut a, n, stride, radius);
+                    plain(&src, &mut b, n, stride, radius);
+                    assert_eq!(a, b, "n {n} radius {radius} stride {stride}");
+                }
+            }
+        }
+    }
+
+    /// The shifted-line Gaussian blur against the line-by-line one (each channel of each row, then each
+    /// column), on random images of many shapes and radii.
+    #[test]
+    fn gaussian_blur_matches_line_by_line() {
+        fn plain(img: &Rgb8, radius: f32) -> Rgb8 {
+            let r = gaussian_blur_radius(radius, 3);
+            let (w, h) = (img.width, img.height);
+            let mut cur = img.clone();
+            for _ in 0..3 {
+                let mut next = Rgb8::new(w, h);
+                for y in 0..h {
+                    for c in 0..3 {
+                        let s = &cur.data[y * w * 3 + c..(y + 1) * w * 3];
+                        let o = &mut next.data[y * w * 3 + c..(y + 1) * w * 3];
+                        box_blur_line(s, o, w, 3, r);
+                    }
+                }
+                cur = next;
+            }
+            for _ in 0..3 {
+                let mut next = Rgb8::new(w, h);
+                for x in 0..w {
+                    for c in 0..3 {
+                        let s = &cur.data[x * 3 + c..];
+                        let o = &mut next.data[x * 3 + c..];
+                        box_blur_line(s, o, h, w * 3, r);
+                    }
+                }
+                cur = next;
+            }
+            cur
+        }
+        let mut seed = 0x853C49E6748FEA9Bu64;
+        for (w, h) in [(1, 1), (2, 5), (3, 3), (7, 2), (9, 11), (64, 3), (131, 67)] {
+            let data = (0..w * h * 3)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (seed >> 56) as u8
+                })
+                .collect();
+            let img = Rgb8::from_vec(w, h, data);
+            for radius in [0.5f32, 1.0, 2.0, 3.3, 6.0] {
+                assert_eq!(
+                    gaussian_blur(&img, radius).data,
+                    plain(&img, radius).data,
+                    "{w}x{h} radius {radius}"
+                );
+            }
+        }
     }
 
     #[test]

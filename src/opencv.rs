@@ -314,7 +314,100 @@ pub fn ycrcb_to_rgb(img: &Rgb8) -> Rgb8 {
 
 /// Median filter with a `ksize` x `ksize` window (3 or 5 here), edges repeated outward
 /// (`cv2.medianBlur`, which uses BORDER_REPLICATE).
+///
+/// The median of a window is one fixed value, so how it's found doesn't change the output. We use a
+/// sorting network (a fixed list of compare-and-swap steps that always sorts, pruned to the steps the
+/// middle element depends on) and run it on LANES neighbouring pixels at once: each step is a `min` and
+/// a `max` over two short arrays, which the compiler turns into SIMD instructions. `median_blur_select`
+/// below is the plain version it is tested against.
 pub fn median_blur(src: &Gray8, ksize: usize) -> Gray8 {
+    let (w, h) = (src.width, src.height);
+    let r = ksize / 2;
+    let n = ksize * ksize;
+    let net = median_network(n);
+    let mut out = Gray8::new(w, h);
+    out.data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        // the ksize source rows, each padded by r repeated edge pixels on both sides
+        let pw = w + 2 * r;
+        let mut rows = vec![0u8; ksize * pw];
+        for (k, prow) in rows.chunks_exact_mut(pw).enumerate() {
+            let sy = (y + k).saturating_sub(r).min(h - 1);
+            let line = &src.data[sy * w..][..w];
+            prow[r..r + w].copy_from_slice(line);
+            prow[..r].fill(line[0]);
+            prow[r + w..].fill(line[w - 1]);
+        }
+        let mut v = vec![[0u8; LANES]; n];
+        for x0 in (0..w).step_by(LANES) {
+            let lanes = LANES.min(w - x0);
+            let mut i = 0;
+            for prow in rows.chunks_exact(pw) {
+                for dx in 0..ksize {
+                    v[i][..lanes].copy_from_slice(&prow[x0 + dx..][..lanes]);
+                    i += 1;
+                }
+            }
+            for &(a, b) in &net {
+                let (lo, hi) = (v[a as usize], v[b as usize]);
+                let mut mn = [0u8; LANES];
+                let mut mx = [0u8; LANES];
+                for j in 0..LANES {
+                    mn[j] = lo[j].min(hi[j]);
+                    mx[j] = lo[j].max(hi[j]);
+                }
+                v[a as usize] = mn;
+                v[b as usize] = mx;
+            }
+            row[x0..x0 + lanes].copy_from_slice(&v[n / 2][..lanes]);
+        }
+    });
+    out
+}
+
+/// Pixels per sorting-network pass in `median_blur` (two 256-bit vectors of bytes).
+const LANES: usize = 64;
+
+/// A sorting network for `n` values (Batcher's odd-even merge sort, which works for any n by skipping
+/// comparators that reach past the end), keeping only the comparators that the middle output depends on.
+/// Each pair (a, b) with a < b means: put the smaller value at a and the larger at b.
+fn median_network(n: usize) -> Vec<(u16, u16)> {
+    let mut net = Vec::new();
+    let mut p = 1;
+    while p < n {
+        let mut k = p;
+        while k >= 1 {
+            let mut j = k % p;
+            while j + k < n {
+                for i in 0..k.min(n - j - k) {
+                    if (i + j) / (2 * p) == (i + j + k) / (2 * p) {
+                        net.push(((i + j) as u16, (i + j + k) as u16));
+                    }
+                }
+                j += 2 * k;
+            }
+            k /= 2;
+        }
+        p *= 2;
+    }
+    // walk backwards from the middle output: a comparator matters if it writes a value we still need,
+    // and then both of its inputs are needed
+    let mut need = vec![false; n];
+    need[n / 2] = true;
+    let mut kept = Vec::new();
+    for &(a, b) in net.iter().rev() {
+        if need[a as usize] || need[b as usize] {
+            need[a as usize] = true;
+            need[b as usize] = true;
+            kept.push((a, b));
+        }
+    }
+    kept.reverse();
+    kept
+}
+
+/// The plain median filter: copy each window out and select its middle value. Same output as
+/// `median_blur`; kept as the reference the tests compare against.
+pub fn median_blur_select(src: &Gray8, ksize: usize) -> Gray8 {
     let (w, h) = (src.width, src.height);
     let r = (ksize / 2) as isize;
     let mut out = Gray8::new(w, h);
@@ -624,6 +717,72 @@ pub(crate) mod tests {
 
     pub fn crop() -> Rgb8 {
         Rgb8::from_vec(600, 400, prim("crop"))
+    }
+
+    /// The pruned median networks pick the median of every input. By the 0-1 principle it is enough
+    /// to check every input of 0s and 1s: all 2^9 for 3x3 and all 2^25 for 5x5, 64 inputs at a time
+    /// (one per bit of a u64, so min is AND and max is OR).
+    #[test]
+    fn median_networks_select_the_median() {
+        for n in [9usize, 25] {
+            let net = median_network(n);
+            let total = 1u64 << n;
+            let mut base = 0u64;
+            while base < total {
+                // wire i holds bit i of the inputs base..base+64 (n >= 6, so 64 divides 2^n)
+                let mut v: Vec<u64> = (0..n)
+                    .map(|i| (0..64u64).fold(0, |acc, k| acc | ((((base + k) >> i) & 1) << k)))
+                    .collect();
+                for &(a, b) in &net {
+                    let (x, y) = (v[a as usize], v[b as usize]);
+                    v[a as usize] = x & y;
+                    v[b as usize] = x | y;
+                }
+                for k in 0..64u64 {
+                    let ones = (base + k).count_ones() as usize;
+                    // sorted ascending, the middle value is 1 exactly when more than n/2 inputs are 1
+                    let want = (ones > n / 2) as u64;
+                    assert_eq!((v[n / 2] >> k) & 1, want, "n={n} input={:#x}", base + k);
+                }
+                base += 64;
+            }
+        }
+    }
+
+    /// The network median gives the same image as selecting each window's median, on random images of
+    /// many shapes (smaller than the window, narrower than one SIMD pass, odd widths) and both sizes.
+    #[test]
+    fn median_blur_matches_select() {
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for (w, h) in [
+            (1, 1),
+            (2, 3),
+            (5, 1),
+            (7, 9),
+            (63, 4),
+            (64, 5),
+            (65, 6),
+            (130, 17),
+            (301, 40),
+        ] {
+            for levels in [2u64, 7, 256] {
+                let data = (0..w * h).map(|_| (next() % levels) as u8).collect();
+                let g = Gray8::from_vec(w, h, data);
+                for k in [3, 5] {
+                    assert_eq!(
+                        median_blur(&g, k).data,
+                        median_blur_select(&g, k).data,
+                        "{w}x{h} levels {levels} k {k}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

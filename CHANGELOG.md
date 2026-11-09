@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.3 (2026-11-09)
+
+A speed release. Every output is byte-identical to 0.1.2; nothing about looks, options, JSON or exit
+codes changed. Details, method and numbers: `docs/PERF.md`.
+
+- About 2.2–2.6x faster on the CPU for frames with noise reduction: one 26 MP ISO 12800 frame 9.2 s ->
+  4.2 s; nine of them 91.8 s -> 35.3 s; three 24 MP night frames 25.7 s -> 11.0 s (12 threads, x86-64-v3
+  release build). The baseline x86-64 build gains about the same (31.2 s -> 15.8 s), and `--threads 3`
+  more (49.0 s -> 17.1 s).
+- With `--gpu`, 1.2–1.4x faster (the GPU noise reduction itself is unchanged; the rest of the frame got
+  faster): three night frames 10.8 s -> 7.6 s on an RTX 2060, 11.7 s -> 9.0 s on a Radeon 760M.
+- Layered looks, decode, `ingest` and `cull` are unchanged in speed. Peak memory is about the same.
+- Noise reduction (NLM) on the CPU: the patch-distance sum now compiles to SIMD instructions, and
+  search offsets o and -o share their patch distances, which nearly halves that work.
+- The Cr/Cb median filter after NLM is a sorting network over 64 pixels at a time (about 20x faster).
+- The unsharp mask's box blur adds whole shifted lines instead of walking each line sample by sample,
+  and no longer transposes the image (about 3x faster).
+- In a batch, each frame's EXIF copy (exiftool) runs while the next frame develops. JSON events and log
+  lines keep their order; a frame's `seconds` is its develop time plus its EXIF copy.
+- Checked: 178 JPEGs per build (89 frames, all four built-in looks with their per-frame options, plus
+  layered looks) are `cmp`-identical to 0.1.2 for the x86-64-v3 and baseline builds and for `--gpu` on an
+  RTX 2060 and a Radeon 760M; 12 more on llvmpipe. New unit tests check each rewrite against the plain
+  version (the median network for every 0/1 input).
+- New `examples/stage_bench.rs`: times the pixel stages on one frame and prints a hash of each output.
+
 ## 0.1.2 (2026-10-21)
 
 - New `layered` recipe (`recipe = "layered"` in a look file): LibRaw's display rendering (auto white

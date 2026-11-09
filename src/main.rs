@@ -1024,22 +1024,47 @@ fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
         planned.len(),
         look.name
     ))?;
-    let mut done = Vec::new();
-    let mut failed = Vec::new();
-    for (i, p) in planned.iter().enumerate() {
-        let job = &p.job;
-        let frame_start = Instant::now();
-        let Ok((decoded, decode_secs, sha)) = rx.recv() else {
-            return Err(Fail::from(std::io::Error::other(
-                "the decoder thread stopped",
-            )));
-        };
-        let result = decoded
-            .map_err(|e| e.into())
-            .and_then(|raw| develop::develop(job, &look, raw));
-        match result {
-            Ok(rep) => {
-                let secs = frame_start.elapsed().as_secs_f64();
+    // Frame i's EXIF copy, output hashes, log line and events run on a second thread (the finisher)
+    // while frame i + 1 develops. Frames reach it in order, so the log and the events keep their order.
+    enum Developed {
+        Done(
+            develop::FrameReport,
+            f64,
+            f64,
+            std::result::Result<String, String>,
+        ),
+        Failed(String),
+    }
+    let finished = std::thread::scope(|s| -> R<(Vec<Value>, Vec<Value>)> {
+        let (ftx, frx) = mpsc::channel::<(usize, Developed)>();
+        let finisher = s.spawn(|| -> R<(Vec<Value>, Vec<Value>)> {
+            let mut done = Vec::new();
+            let mut failed = Vec::new();
+            for (i, d) in frx {
+                let p = &planned[i];
+                let job = &p.job;
+                let developed = match d {
+                    Developed::Done(mut rep, dev_secs, decode_secs, sha) => {
+                        match develop::copy_exif(job, &mut rep) {
+                            Ok(()) => Ok((rep, dev_secs, decode_secs, sha)),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    Developed::Failed(e) => Err(e),
+                };
+                let (rep, dev_secs, decode_secs, sha) = match developed {
+                    Ok(x) => x,
+                    Err(e) => {
+                        human.log(&format!("{} FAILED {e}", job.stem))?;
+                        let rec = json!({ "index": i, "input": job.raw, "stem": job.stem,
+                                          "error": e });
+                        ev.emit("frame_failed", rec.clone());
+                        failed.push(rec);
+                        continue;
+                    }
+                };
+                // the frame's time: developing it (from asking for its decode) plus its EXIF copy
+                let secs = dev_secs + rep.timings.last().map_or(0.0, |t| t.1);
                 human.log(&log_line(job, &rep, secs, decode_secs))?;
                 let mut outputs = Vec::new();
                 for (kind, path) in [("full", &job.out_full), ("share", &job.out_share)] {
@@ -1077,15 +1102,32 @@ fn develop_cmd(cmd: Cmd, o: &Opts, ev: &Events) -> R<i32> {
                 ev.emit("frame_done", rec.clone());
                 done.push(rec);
             }
-            Err(e) => {
-                human.log(&format!("{} FAILED {e}", job.stem))?;
-                let rec = json!({ "index": i, "input": job.raw, "stem": job.stem,
-                                  "error": e.to_string() });
-                ev.emit("frame_failed", rec.clone());
-                failed.push(rec);
+            Ok((done, failed))
+        });
+        for (i, p) in planned.iter().enumerate() {
+            let frame_start = Instant::now();
+            let Ok((decoded, decode_secs, sha)) = rx.recv() else {
+                return Err(Fail::from(std::io::Error::other(
+                    "the decoder thread stopped",
+                )));
+            };
+            let msg = match decoded
+                .map_err(|e| e.into())
+                .and_then(|raw| develop::develop_pixels(&p.job, &look, raw))
+            {
+                Ok(rep) => {
+                    Developed::Done(rep, frame_start.elapsed().as_secs_f64(), decode_secs, sha)
+                }
+                Err(e) => Developed::Failed(e.to_string()),
+            };
+            if ftx.send((i, msg)).is_err() {
+                break; // the finisher stopped on an error; join() below returns it
             }
         }
-    }
+        drop(ftx);
+        finisher.join().expect("the finisher thread panicked")
+    });
+    let (done, failed) = finished?;
     drop(rx);
     decoder.join().ok();
     let total = batch_start.elapsed().as_secs_f64();

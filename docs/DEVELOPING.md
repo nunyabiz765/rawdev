@@ -42,6 +42,7 @@ looks/        the built-in looks (neutral-day, neutral-night, rich-day, rich-nig
 docs/         JSON.md (the agent contract), BUILD-WITH-AI.md, this file
 tests/cli.rs  command-line contract tests: exit codes, JSON events, refusals, dry runs write nothing
 examples/nlm_bench.rs   times NLM alone, CPU vs GPU, with a --check mode that counts differing samples
+examples/stage_bench.rs times the CPU pixel stages on one frame and prints a hash of each output (docs/PERF.md)
 tools/        fetch-samples.sh + samples.tsv (public CC0 test RAWs), gpu-parity.sh (CPU vs every GPU,
               byte for byte), ref_primitives.py (cv2/PIL reference data for the ignored tests)
 packaging/    release.sh (portable release tarball), AUR PKGBUILDs, the OpenClaw skill

@@ -129,6 +129,15 @@ fn dump(dir: &Option<PathBuf>, name: &str, img: &Rgb8) -> Result<()> {
 
 /// Develop one frame with its recipe and look. (The caller checks that the look's `recipe` matches.)
 pub fn develop(job: &FrameJob, look: &Look, raw: decode::Linear16) -> Result<FrameReport> {
+    let mut rep = develop_pixels(job, look, raw)?;
+    copy_exif(job, &mut rep)?;
+    Ok(rep)
+}
+
+/// [`develop`] up to and including writing both JPEGs, without the EXIF copy. A batch runs
+/// [`copy_exif`] for this frame on another thread while the next frame develops (exiftool is a separate,
+/// single-threaded program, so the two overlap almost for free).
+pub fn develop_pixels(job: &FrameJob, look: &Look, raw: decode::Linear16) -> Result<FrameReport> {
     match job.recipe {
         Recipe::Night(o) => develop_night(job, look, o, raw),
         Recipe::Day(o) => develop_day(job, look, o, raw),
@@ -345,7 +354,15 @@ fn finish(
     export_tail(job, look, img, t, info, nr, notes, tone_source)
 }
 
-/// Share copy, JPEG encodes, EXIF/GPS copy.
+/// Copy the RAW's EXIF/GPS into both outputs (the last step of a frame), timed as "exif copy".
+pub fn copy_exif(job: &FrameJob, rep: &mut FrameReport) -> Result<()> {
+    let t0 = Instant::now();
+    export::copy_exif(&job.raw, &[&job.out_full, &job.out_share])?;
+    rep.timings.push(("exif copy", t0.elapsed().as_secs_f64()));
+    Ok(())
+}
+
+/// Share copy and the two JPEG encodes.
 #[allow(clippy::too_many_arguments)]
 fn export_tail(
     job: &FrameJob,
@@ -380,9 +397,6 @@ fn export_tail(
     });
     a?;
     b?;
-    t.step("exif copy", || {
-        export::copy_exif(&job.raw, &[&job.out_full, &job.out_share])
-    })?;
 
     Ok(FrameReport {
         size: (img.width, img.height),

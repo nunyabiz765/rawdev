@@ -14,14 +14,15 @@ the GPU; that path is designed to be bit-exact with the CPU, not just close.
 
 Download the tarball and its checksum from the [Releases](../../releases) page. The main build needs a
 CPU with AVX2 (x86-64-v3: Intel Haswell / AMD Excavator, ~2015, or newer); for older CPUs use
-`rawdev-0.1.2-x86_64-baseline-linux.tar.gz` instead (same output, ~20% slower noise reduction).
+`rawdev-0.1.3-x86_64-baseline-linux.tar.gz` instead (same output, about 1.5x slower on batches heavy in
+noise reduction).
 
 ```sh
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.2/rawdev-0.1.2-x86_64-linux.tar.gz
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.2/rawdev-0.1.2-x86_64-linux.tar.gz.sha256
-sha256sum -c rawdev-0.1.2-x86_64-linux.tar.gz.sha256
-tar xzf rawdev-0.1.2-x86_64-linux.tar.gz
-install -Dm755 rawdev-0.1.2-x86_64-linux/rawdev ~/.local/bin/rawdev
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.3/rawdev-0.1.3-x86_64-linux.tar.gz
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.3/rawdev-0.1.3-x86_64-linux.tar.gz.sha256
+sha256sum -c rawdev-0.1.3-x86_64-linux.tar.gz.sha256
+tar xzf rawdev-0.1.3-x86_64-linux.tar.gz
+install -Dm755 rawdev-0.1.3-x86_64-linux/rawdev ~/.local/bin/rawdev
 ```
 
 The binary is built on Debian 12 (glibc 2.36), so it runs on that or anything newer (Ubuntu 24.04,
@@ -285,35 +286,46 @@ not shipped in this repository.
 
 ## Benchmarks
 
-Measured 2026-10-18 on one desktop: Ryzen 5 8600G (6 cores / 12 threads), RTX 2060 (NVIDIA 615
-driver), Radeon 760M iGPU (Mesa RADV 26.2), 32 GB RAM. Other work was running at the same time (load
-average around 11), so treat these as conservative. Times are whole batches, wall clock, including
-decode, exiftool and JPEG encode; "NR" is the noise-reduction step alone, per frame.
+Measured 2026-11-09 on one desktop: Ryzen 5 8600G (6 cores / 12 threads), RTX 2060 (NVIDIA 615
+driver), Radeon 760M iGPU (Mesa RADV 26.2), 32 GB RAM, with the x86-64-v3 release binaries of 0.1.2 and
+0.1.3 run back to back on the same files. Other work was running at the same time (load average 3–14),
+so treat absolute times as conservative. Times are whole batches, wall clock (mean of 2–5
+[hyperfine](https://github.com/sharkdp/hyperfine) runs), including decode, exiftool and JPEG encode.
+Method, per-step numbers and what was tried: [docs/PERF.md](docs/PERF.md).
 
-| Batch | CPU (12 threads) | RTX 2060 | Radeon 760M | llvmpipe (software Vulkan) |
-|---|---|---|---|---|
-| 3 × 24 MP Canon R100 frames, `rich-night` (NR on all) | 23.7 s (NR 6.6 s) | 10.1 s (NR 2.0 s) | 11.4 s (NR 2.5 s) | 268 s (NR 88 s) |
-| 4 × 24 MP Canon R100 frames, `rich-day` (NR on 3) | 27.6 s (NR 6.7 s) | 13.1 s (NR 2.0 s) | 14.2 s (NR 2.4 s) | 276 s (NR 90 s) |
-| 9 public samples, 10–24 MP, `rich-night` | 51.0 s (NR 4.0 s) | 25.6 s (NR 1.0 s) | 28.3 s (NR 1.3 s) | 530 s (NR 58 s) |
+| Batch | CPU (12 threads) | RTX 2060 | Radeon 760M |
+|---|---|---|---|
+| 1 × 26 MP Canon RP frame, ISO 12800, `neutral-night` | 9.2 s → **4.2 s** | 4.0 s → **3.5 s** | |
+| 3 × 24 MP Canon R100 night frames, `rich-night` (NR on all) | 25.7 s → **11.0 s** | 10.8 s → **7.6 s** | 11.7 s → **9.0 s** |
+| 4 × 24 MP Canon R100 day frames, `rich-day` (NR on 3) | 32.3 s → **14.1 s** | 14.6 s → **12.8 s** | |
+| 9 × 26 MP Canon RP frames, ISO 12800–25600, `neutral-night` | 91.8 s → **35.3 s** | 35 s → **26 s** (`--threads 6`, best runs) | |
+| 9 public samples, 10–24 MP, `rich-night` | 58.0 s → **30.9 s** | 27.9 s → **23.6 s** | |
 
-- **Bit-exact:** every JPEG from every GPU run above is byte-identical (`cmp`) to the CPU run's: 32 files
-  per device, 96 comparisons, 0 differences (`tools/gpu-parity.sh`). llvmpipe is only there to show the
-  shader is exact on a third, completely different Vulkan implementation; never use it for real work.
+0.1.2 → **0.1.3**. Output is byte-identical between the two.
+
+- **Bit-exact:** every JPEG from every GPU run is byte-identical (`cmp`) to the CPU run's, on the RTX
+  2060, the Radeon 760M and llvmpipe (software Vulkan, only there to show the shader is exact on a third,
+  completely different Vulkan implementation; never use it for real work). See `tools/gpu-parity.sh`.
+- **Where the time goes:** on the CPU, noise reduction is most of a high-ISO frame (about 2.5 s of a
+  26 MP frame in 0.1.3, down from 7.3 s). With `--gpu` it is about 1.3 s of GPU time, and decode,
+  sharpening and colour steps make up the rest.
 - **Without NR** (daylight frames at low ISO) a 24 MP frame takes about 1.5–2.5 s on the CPU; the GPU
   doesn't help there.
-- The 9-sample GPU batches are held back by the single-threaded Fujifilm X-Trans decode (~10 s for that
-  one frame; see "Cameras tested").
-- **CPU builds:** the release binary is built for x86-64-v3 (AVX2), which measured the same as a
-  `-C target-cpu=native` build here (23.1–23.4 s vs 23.1–23.5 s on the night batch). The baseline x86-64
-  build is about 22% slower on NR-heavy frames (28.8–29.1 s). All three produce byte-identical output.
-- **Threads and parallel batches** (measured 2026-10-21, same machine): `--threads N` caps a batch at N CPU threads; output is byte-identical
-  at any count. The 3-frame night batch took 23.0 s on all 12 threads and 44.9 s with `--threads 3`; one
-  frame alone took 41.2 s with `--threads 1`. Two batches started side by side share the CPU well and
-  finished ~10% sooner than running them one after the other (42.6 s vs 46.9 s for 3 + 3 night frames;
-  10.2 s vs 12.8 s for 4 + 4 low-ISO day frames), so scripts don't need to queue batches. Use
-  `--threads` to keep a desktop responsive, not to go faster.
+- Batches with a Fujifilm X-Trans file wait on its single-threaded decode (~10–13 s for that one frame;
+  see "Cameras tested"), which is most of the GPU sample batch.
+- **CPU builds:** the release binary is built for x86-64-v3 (AVX2). The baseline x86-64 build took 15.8 s
+  on the 3-frame night batch (0.1.2: 31.2 s). Both produce byte-identical output.
+- **Threads and parallel batches:** `--threads N` caps a batch at N CPU threads; output is
+  byte-identical at any count. The 3-frame night batch took 17.1 s with `--threads 3` (0.1.2: 49.0 s).
+  Two batches started side by side share the CPU well (measured on 0.1.1: ~10% sooner than one after the
+  other), so scripts don't need to queue batches. Use `--threads` to keep a desktop responsive, not to go
+  faster.
+- **Layered looks** spend their time in float steps that 0.1.3 doesn't change: 4 day frames with a
+  14-step layered look took 24.5 s in 0.1.2 and 24.0 s in 0.1.3.
+- **Memory:** peak resident memory is about the same as 0.1.2 (0.75 GB for one 26 MP frame, 1.0–1.3 GB
+  for the batches above; up to 1.9 GB with a heavy layered look).
 - For scale: the Python/numpy/OpenCV prototype this engine was ported from took 75–130 s per 24 MP night
-  frame on the same machine; rawdev's CPU path is about 8 s, with the same output to within rounding.
+  frame on the same machine; rawdev's CPU path is about 4 s, with the same output to within rounding.
 
 ## Limitations
 
