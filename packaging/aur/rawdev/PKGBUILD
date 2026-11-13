@@ -1,6 +1,6 @@
 # Maintainer: Nick Sosa <88122618+nunyabiz765@users.noreply.github.com>
 pkgname=rawdev
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc='RAW photo develop engine for scripts and AI agents: JSON output, dry runs, manifests, safety guards'
 arch=('x86_64' 'aarch64')
@@ -40,7 +40,7 @@ package() {
   cd "$pkgname-$pkgver"
   install -Dm755 target/release/rawdev "$pkgdir/usr/bin/rawdev"
   install -Dm644 LICENSE-MIT LICENSE-APACHE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
-  install -Dm644 README.md CHANGELOG.md docs/JSON.md docs/BUILD-WITH-AI.md docs/DEVELOPING.md \
+  install -Dm644 README.md CHANGELOG.md docs/JSON.md docs/BUILD-WITH-AI.md docs/DEVELOPING.md docs/PERF.md \
     -t "$pkgdir/usr/share/doc/$pkgname/"
   install -Dm644 looks/*.toml -t "$pkgdir/usr/share/$pkgname/looks/"
   install -Dm644 packaging/openclaw/rawdev/SKILL.md "$pkgdir/usr/share/$pkgname/openclaw/rawdev/SKILL.md"

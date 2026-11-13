@@ -14,15 +14,15 @@ the GPU; that path is designed to be bit-exact with the CPU, not just close.
 
 Download the tarball and its checksum from the [Releases](../../releases) page. The main build needs a
 CPU with AVX2 (x86-64-v3: Intel Haswell / AMD Excavator, ~2015, or newer); for older CPUs use
-`rawdev-0.1.3-x86_64-baseline-linux.tar.gz` instead (same output, about 1.5x slower on batches heavy in
+`rawdev-0.1.4-x86_64-baseline-linux.tar.gz` instead (same output, about 1.5x slower on batches heavy in
 noise reduction).
 
 ```sh
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.3/rawdev-0.1.3-x86_64-linux.tar.gz
-curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.3/rawdev-0.1.3-x86_64-linux.tar.gz.sha256
-sha256sum -c rawdev-0.1.3-x86_64-linux.tar.gz.sha256
-tar xzf rawdev-0.1.3-x86_64-linux.tar.gz
-install -Dm755 rawdev-0.1.3-x86_64-linux/rawdev ~/.local/bin/rawdev
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.4/rawdev-0.1.4-x86_64-linux.tar.gz
+curl -LO https://github.com/nunyabiz765/rawdev/releases/download/v0.1.4/rawdev-0.1.4-x86_64-linux.tar.gz.sha256
+sha256sum -c rawdev-0.1.4-x86_64-linux.tar.gz.sha256
+tar xzf rawdev-0.1.4-x86_64-linux.tar.gz
+install -Dm755 rawdev-0.1.4-x86_64-linux/rawdev ~/.local/bin/rawdev
 ```
 
 The binary is built on Debian 12 (glibc 2.36), so it runs on that or anything newer (Ubuntu 24.04,
@@ -164,6 +164,10 @@ rawdev develop --look mine.toml --out developed ~/Photos/card/*.NEF
 
 Unknown keys in a look file are errors, so a typo doesn't get silently ignored.
 
+Your own looks can live in `~/.config/rawdev/looks/` (next to the config file; `$XDG_CONFIG_HOME` and
+`$RAWDEV_CONFIG` move it too). A file `looks/NAME.toml` there is then usable as `--look NAME`; built-in
+names win if they collide.
+
 ### The layered recipe
 
 The built-in looks use the `night` and `day` recipes: a tone curve fitted to the camera's JPEG, then
@@ -195,7 +199,11 @@ midpoint = 0.45
 Steps: `levels`, `sigmoid`, `saturation` (HSL, weighted towards muted colours), `chroma-blur` (Lab
 a/b), `stretch` (per-channel contrast stretch), `unsharp` (large sigma = local contrast, small =
 sharpening), `fringe` (purple-fringe desaturation in the top of the frame, on edges only),
-`bright-smooth` (median-smooth clipped skies and bright areas), and `clamp`. Every parameter is
+`bright-smooth` (median-smooth clipped skies and bright areas), `channel-levels` (output levels per
+channel, ImageMagick `-channel X +level`: faded blacks and split toning), `mono` (black and white from
+a weighted R/G/B mix; red-heavy darkens blue sky like a red filter), `grain` (seeded monochrome film
+grain, overlay-blended so it sits in the midtones; its size can be set for the share copy), and
+`clamp`. Every parameter is
 documented in `src/lookfile.rs` (`enum Step`). The maths follows ImageMagick 7 (Q16 HDRI) operator for
 operator, Gaussian kernels and Lab/HSL formulas included, so a look first prototyped as a `magick`
 pipeline can be moved over and give the same picture: a seven-command ImageMagick develop (24 MP,
@@ -203,6 +211,36 @@ pipeline can be moved over and give the same picture: a seven-command ImageMagic
 ~3.7 s each. Values may go above 1 or below 0 between steps, as in ImageMagick's HDRI build; `clamp` is
 where a `magick` pipeline would have written a 16-bit file. Layered looks have no per-frame flags (`--match`, `--strong`, ...): make a second look
 file for frames that need different settings.
+
+A film-style finish, after a look's usual steps:
+
+```toml
+[[step]]                   # faded, cool blacks and warm highlights
+op = "channel-levels"
+r_black = 0.02
+r_white = 1.00
+g_black = 0.03
+g_white = 0.98
+b_black = 0.07
+b_white = 0.96
+
+[[step]]                   # fine grain, sized for the 2000 px share copy; same seed = same grain
+op = "grain"
+amount = 0.013
+size = 0.7
+long_edge = 2000
+seed = 35
+```
+
+and black and white:
+
+```toml
+[[step]]
+op = "mono"
+red = 0.45
+green = 0.55
+blue = 0.0
+```
 
 Per-frame choices (`--match`, `--shadow-lift`, `--recover-hl` for day looks; `--strong`, `--nofringe`
 for night looks) can also go in a recipe file instead of flags:

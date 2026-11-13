@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.4 (2026-11-13)
+
+Film and black and white in layered looks, and your own looks by name. Built-in looks and every
+existing look file develop exactly as in 0.1.3.
+
+- Three new layered steps:
+  - `channel-levels`: output levels per channel (ImageMagick `-channel X +level black,white`), for
+    faded blacks and split toning.
+  - `mono`: black and white from a weighted R/G/B mix (weights are normalised). Red-heavy mixes darken
+    blue sky like a red filter; green-heavy mixes lighten foliage.
+  - `grain`: monochrome Gaussian film grain (`amount` = standard deviation, `size` = blur in px),
+    overlay-blended so it is strongest in the midtones and absent at pure black and white. `long_edge`
+    lays the grain out for an image of that size (e.g. the 2000 px share copy) so it looks the same
+    there as it was tuned; `seed` makes it repeatable: the same frame always gets the same grain,
+    whatever the thread count.
+- `--look NAME` also finds `NAME.toml` in `~/.config/rawdev/looks/` (the `looks/` folder next to the
+  config file), so your own looks work by name. Built-in names win.
+- Checked: film and B&W looks built from these steps match an ImageMagick finish of the same develop
+  to within about 1% mean absolute error (the difference is the random grain); two built-in looks and
+  a 14-step layered look give `cmp`-identical JPEGs to 0.1.3 (rich-day, neutral-day and the layered look on
+  three frames: two Canon CR3s and a 5D Mark II CR2); runs are byte-identical run to run.
+
 ## 0.1.3 (2026-11-09)
 
 A speed release. Every output is byte-identical to 0.1.2; nothing about looks, options, JSON or exit

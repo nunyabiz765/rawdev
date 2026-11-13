@@ -1,6 +1,6 @@
 pkgbase = rawdev-bin
 	pkgdesc = RAW photo develop engine for scripts and AI agents (prebuilt binary)
-	pkgver = 0.1.3
+	pkgver = 0.1.4
 	pkgrel = 1
 	url = https://github.com/nunyabiz765/rawdev
 	arch = x86_64
@@ -17,7 +17,7 @@ pkgbase = rawdev-bin
 	conflicts = rawdev
 	options = !debug
 	options = !strip
-	source = https://github.com/nunyabiz765/rawdev/releases/download/v0.1.3/rawdev-0.1.3-x86_64-linux.tar.gz
-	sha256sums = SKIP
+	source = https://github.com/nunyabiz765/rawdev/releases/download/v0.1.4/rawdev-0.1.4-x86_64-linux.tar.gz
+	sha256sums = 30c65854332250c6b42317808035a9ea022f4512d631dc9a357e4221b476298b
 
 pkgname = rawdev-bin

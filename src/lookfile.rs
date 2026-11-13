@@ -22,6 +22,21 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("rich-night", include_str!("../looks/rich-night.toml")),
 ];
 
+/// Your own looks: `looks/` next to the config file (`~/.config/rawdev/looks/` by default), so a file
+/// `looks/NAME.toml` there works as `--look NAME`. Built-in names win.
+pub fn user_looks_dir() -> Option<std::path::PathBuf> {
+    crate::tools::config_path().and_then(|c| c.parent().map(|d| d.join("looks")))
+}
+
+/// `NAME` -> `user_looks_dir()/NAME.toml`, if `NAME` is a plain name and that file exists.
+fn user_look(name: &str) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.ends_with(".toml") {
+        return None;
+    }
+    let p = user_looks_dir()?.join(format!("{name}.toml"));
+    p.is_file().then_some(p)
+}
+
 /// Which pipeline a look runs.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -417,6 +432,33 @@ pub enum Step {
         median: usize,
         blur: f64,
     },
+    /// output levels per channel (ImageMagick `-channel X +level black,white`): `x -> black + x (white -
+    /// black)`. Lifting one channel's black and pulling its white in tints shadows and highlights apart
+    /// (split toning, faded film blacks)
+    ChannelLevels {
+        r_black: f32,
+        r_white: f32,
+        g_black: f32,
+        g_white: f32,
+        b_black: f32,
+        b_white: f32,
+    },
+    /// black and white: every channel becomes `red R + green G + blue B` (weights are normalised to sum
+    /// to 1). Red-heavy mixes darken blue sky like a red filter; green-heavy ones lighten foliage
+    Mono { red: f32, green: f32, blue: f32 },
+    /// film grain: monochrome Gaussian noise (standard deviation `amount`), blurred by `size` px,
+    /// overlay-blended (the ImageMagick `gray50 +noise gaussian -compose overlay` trick: strongest in the
+    /// midtones, none at pure black or white). The grain is laid out for an image `long_edge` px on its
+    /// long side (0 = the full-size frame) so it looks the same on the share copy as it was tuned on.
+    /// Seeded: the same frame always gets the same grain
+    Grain {
+        amount: f32,
+        size: f64,
+        #[serde(default)]
+        long_edge: usize,
+        #[serde(default)]
+        seed: u64,
+    },
 }
 
 impl Step {
@@ -432,6 +474,9 @@ impl Step {
             Step::Unsharp { .. } => "unsharp",
             Step::Fringe { .. } => "fringe",
             Step::BrightSmooth { .. } => "bright-smooth",
+            Step::ChannelLevels { .. } => "channel-levels",
+            Step::Mono { .. } => "mono",
+            Step::Grain { .. } => "grain",
         }
     }
 }
@@ -452,15 +497,23 @@ impl Look {
         if let Some((_, text)) = BUILTIN.iter().find(|(n, _)| *n == name_or_path) {
             return Look::parse(text);
         }
-        let path = Path::new(name_or_path);
-        if !path.exists() {
-            let names: Vec<&str> = BUILTIN.iter().map(|b| b.0).collect();
-            return Err(format!(
-                "no look called {name_or_path} (built in: {}; or give a path to a .toml file)",
-                names.join(", ")
-            )
-            .into());
-        }
+        let given = Path::new(name_or_path);
+        let user = user_look(name_or_path);
+        let path = match (given.exists(), &user) {
+            (true, _) => given,
+            (false, Some(u)) => u.as_path(),
+            (false, None) => {
+                let names: Vec<&str> = BUILTIN.iter().map(|b| b.0).collect();
+                let dir = user_looks_dir()
+                    .map(|d| format!("{}/NAME.toml, ", d.display()))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "no look called {name_or_path} (built in: {}; your own: {dir}or give a path to a .toml file)",
+                    names.join(", ")
+                )
+                .into());
+            }
+        };
         let text = std::fs::read_to_string(path)?;
         let mut look = Look::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         look.origin = path.display().to_string();
@@ -518,11 +571,28 @@ impl Look {
                     median,
                     ..
                 } => mask_end <= mask_start || (*median > 1 && median % 2 == 0),
+                Step::ChannelLevels {
+                    r_black,
+                    r_white,
+                    g_black,
+                    g_white,
+                    b_black,
+                    b_white,
+                } => [r_black, r_white, g_black, g_white, b_black, b_white]
+                    .iter()
+                    .any(|v| !(0.0..=1.0).contains(*v)),
+                Step::Mono { red, green, blue } => {
+                    [red, green, blue].iter().any(|v| **v < 0.0) || red + green + blue <= 0.0
+                }
+                Step::Grain { amount, size, .. } => {
+                    !(0.0..=0.5).contains(amount) || !(0.0..=20.0).contains(size)
+                }
                 _ => false,
             };
             if bad {
                 return Err(format!(
-                    "step {}: white/end must be above black/start, median an odd size",
+                    "step {}: white/end must be above black/start, median an odd size, \
+                     channel levels 0..1, mono weights >= 0 (not all 0), grain amount 0..0.5 and size 0..20",
                     st.name()
                 )
                 .into());
@@ -840,5 +910,39 @@ share_chroma = "4:2:0"
         let no_sharpen = format!("{}{}", &night[..cut], &night[end..]);
         assert!(Look::parse(&no_sharpen).is_err());
         assert!(Look::parse(&format!("{night}\n[[step]]\nop = \"clamp\"\n")).is_err());
+    }
+
+    #[test]
+    fn film_and_mono_steps_parse_and_are_checked() {
+        let film = "\n[[step]]\nop = \"channel-levels\"\nr_black = 0.02\nr_white = 1.0\n\
+                    g_black = 0.03\ng_white = 0.98\nb_black = 0.07\nb_white = 0.96\n\
+                    \n[[step]]\nop = \"mono\"\nred = 0.45\ngreen = 0.55\nblue = 0.0\n\
+                    \n[[step]]\nop = \"grain\"\namount = 0.013\nsize = 0.7\nlong_edge = 2000\n";
+        let l = Look::parse(&format!("{LAYERED}{film}")).unwrap();
+        let names: Vec<&str> = l.step[3..].iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["channel-levels", "mono", "grain"]);
+        // grain's long_edge and seed are optional
+        assert!(
+            Look::parse(&format!(
+                "{LAYERED}{}",
+                film.replace("long_edge = 2000\n", "")
+            ))
+            .is_ok()
+        );
+        for bad in [
+            film.replace("b_white = 0.96", "b_white = 1.5"),
+            film.replace("red = 0.45\ngreen = 0.55", "red = 0.0\ngreen = 0.0"),
+            film.replace("red = 0.45", "red = -0.45"),
+            film.replace("amount = 0.013", "amount = 0.9"),
+        ] {
+            assert!(Look::parse(&format!("{LAYERED}{bad}")).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn user_look_names_are_plain_names_only() {
+        assert!(user_look("../alex").is_none());
+        assert!(user_look("alex.toml").is_none());
+        assert!(user_look("").is_none());
     }
 }

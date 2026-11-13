@@ -950,6 +950,116 @@ pub fn apply(p: &mut Planes, step: &Step) {
             }
             mix_planes(p, &over, &mask);
         }
+        Step::ChannelLevels {
+            r_black,
+            r_white,
+            g_black,
+            g_white,
+            b_black,
+            b_white,
+        } => {
+            for (c, (b, wh)) in [(r_black, r_white), (g_black, g_white), (b_black, b_white)]
+                .into_iter()
+                .enumerate()
+            {
+                p.c[c].par_iter_mut().for_each(|v| *v = b + *v * (wh - b));
+            }
+        }
+        Step::Mono { red, green, blue } => {
+            let t = red + green + blue;
+            let (r, g, b) = (red / t, green / t, blue / t);
+            let y: Vec<f32> = (0..p.len())
+                .into_par_iter()
+                .map(|i| r * p.c[0][i] + g * p.c[1][i] + b * p.c[2][i])
+                .collect();
+            p.c[0].clone_from(&y);
+            p.c[1].clone_from(&y);
+            p.c[2] = y;
+        }
+        Step::Grain {
+            amount,
+            size,
+            long_edge,
+            seed,
+        } => grain(p, amount, size, long_edge, seed),
+    }
+}
+
+/// splitmix64: a tiny, good-enough hash for per-pixel noise that does not depend on thread order.
+fn mix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// One standard-normal sample for cell `i` (Box-Muller on two hashed uniforms).
+fn gauss(seed: u64, i: u64) -> f32 {
+    let a = mix64(seed ^ i.wrapping_mul(2));
+    let b = mix64(seed ^ i.wrapping_mul(2).wrapping_add(1));
+    let u1 = ((a >> 11) as f64 + 0.5) / (1u64 << 53) as f64;
+    let u2 = (b >> 11) as f64 / (1u64 << 53) as f64;
+    ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+}
+
+/// The `grain` step: noise on a grid sized for `long_edge`, blurred, bilinearly scaled to the frame,
+/// then overlay-blended into every channel.
+fn grain(p: &mut Planes, amount: f32, size: f64, long_edge: usize, seed: u64) {
+    let (w, h) = (p.width, p.height);
+    let long = w.max(h);
+    let k = if long_edge == 0 || long_edge >= long {
+        1.0
+    } else {
+        long_edge as f64 / long as f64
+    };
+    let (gw, gh) = (
+        ((w as f64 * k).round() as usize).max(1),
+        ((h as f64 * k).round() as usize).max(1),
+    );
+    let mut n: Vec<f32> = (0..gw * gh)
+        .into_par_iter()
+        .map(|i| gauss(seed, i as u64))
+        .collect();
+    if size > 0.0 {
+        // blurring lowers the spread; scale it back so `amount` stays the standard deviation
+        n = blur(&n, gw, gh, size);
+        let var = n.par_iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>() / n.len() as f64;
+        if var > 0.0 {
+            let s = (1.0 / var.sqrt()) as f32;
+            n.par_iter_mut().for_each(|v| *v *= s);
+        }
+    }
+    let at = |x: usize, y: usize| n[y * gw + x];
+    let field: Vec<f32> = (0..w * h)
+        .into_par_iter()
+        .map(|i| {
+            if k == 1.0 {
+                return 0.5 + amount * n[i];
+            }
+            let (x, y) = (i % w, i / w);
+            let fx = ((x as f64 + 0.5) * k - 0.5).clamp(0.0, (gw - 1) as f64);
+            let fy = ((y as f64 + 0.5) * k - 0.5).clamp(0.0, (gh - 1) as f64);
+            let (x0, y0) = (fx as usize, fy as usize);
+            let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1));
+            let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+            let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+            let bot = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+            0.5 + amount * (top + (bot - top) * ty)
+        })
+        .collect();
+    for c in 0..3 {
+        p.c[c]
+            .par_iter_mut()
+            .zip(field.par_iter())
+            .for_each(|(v, g)| {
+                let (a, b) = (v.clamp(0.0, 1.0), *g);
+                // overlay: the image is the base layer, the grain the blend layer
+                *v = if a < 0.5 {
+                    2.0 * a * b
+                } else {
+                    1.0 - 2.0 * (1.0 - a) * (1.0 - b)
+                };
+            });
     }
 }
 
@@ -1094,5 +1204,61 @@ mod tests {
         let min = v.iter().cloned().fold(1.0, f32::min);
         let max = v.iter().cloned().fold(0.0, f32::max);
         assert_eq!((min, max), (0.0, 1.0));
+    }
+
+    #[test]
+    fn channel_levels_mono_and_grain() {
+        let mk = |v: [f32; 3]| Planes {
+            width: 64,
+            height: 48,
+            c: [
+                vec![v[0]; 64 * 48],
+                vec![v[1]; 64 * 48],
+                vec![v[2]; 64 * 48],
+            ],
+        };
+        // +level maps 0 -> black, 1 -> white
+        let mut p = mk([0.0, 1.0, 0.5]);
+        apply(
+            &mut p,
+            &Step::ChannelLevels {
+                r_black: 0.1,
+                r_white: 0.9,
+                g_black: 0.0,
+                g_white: 0.8,
+                b_black: 0.2,
+                b_white: 0.6,
+            },
+        );
+        assert!((p.c[0][0] - 0.1).abs() < 1e-6 && (p.c[1][0] - 0.8).abs() < 1e-6);
+        assert!((p.c[2][0] - 0.4).abs() < 1e-6);
+        // mono: normalised weights, all channels equal
+        let mut p = mk([1.0, 0.0, 0.5]);
+        apply(
+            &mut p,
+            &Step::Mono {
+                red: 0.9,
+                green: 0.9,
+                blue: 0.0,
+            },
+        );
+        assert!(p.c.iter().all(|c| (c[0] - 0.5).abs() < 1e-6));
+        // grain: deterministic, mean-neutral on mid-grey, untouched at pure black and white
+        let g = Step::Grain {
+            amount: 0.02,
+            size: 0.7,
+            long_edge: 32,
+            seed: 7,
+        };
+        let (mut a, mut b) = (mk([0.5; 3]), mk([0.5; 3]));
+        apply(&mut a, &g);
+        apply(&mut b, &g);
+        assert_eq!(a.c[0], b.c[0]);
+        let mean = a.c[0].iter().sum::<f32>() / a.len() as f32;
+        assert!((mean - 0.5).abs() < 0.005, "{mean}");
+        assert!(a.c[0].iter().any(|v| (v - 0.5).abs() > 0.005));
+        let mut k = mk([0.0, 1.0, 0.0]);
+        apply(&mut k, &g);
+        assert!(k.c[0].iter().all(|v| *v == 0.0) && k.c[1].iter().all(|v| *v == 1.0));
     }
 }

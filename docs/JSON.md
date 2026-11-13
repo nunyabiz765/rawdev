@@ -33,7 +33,7 @@ A run prints `batch_start`, then one `frame_done` / `frame_failed` per frame (or
 ### `batch_start`
 
 ```json
-{"v":1,"event":"batch_start","rawdev_version":"0.1.3","command":"develop","dry_run":false,
+{"v":1,"event":"batch_start","rawdev_version":"0.1.4","command":"develop","dry_run":false,
  "look":{"name":"neutral-day","recipe":"day","origin":"builtin","sha256":"…"},
  "out":"developed","frames":9,"gpu":"NVIDIA GeForce RTX 2060 (Vulkan)","threads":12,
  "tools":{"exiftool":{"path":"/usr/bin/vendor_perl/exiftool","version":"13.55"},
@@ -113,7 +113,7 @@ atomically (temp file + rename), so it is never half-written.
   "rawdev_manifest": 1,
   "runs": [
     {
-      "rawdev_version": "0.1.3",
+      "rawdev_version": "0.1.4",
       "command": "develop",
       "argv": ["develop", "--out", "developed", "card"],
       "started": "2026-10-18T19:27:35Z",
